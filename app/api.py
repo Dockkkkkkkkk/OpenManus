@@ -3,15 +3,19 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from typing import Annotated
+from typing import Annotated, List, Dict, Any
 import json
 import queue
 import time
 import asyncio
 import os
+import re
+import glob
 from pathlib import Path
 from starlette.responses import Response, FileResponse
 import uuid
+import toml
+import openai
 
 app = FastAPI()
 
@@ -30,6 +34,21 @@ message_queue = queue.Queue()
 # 用于存储对话历史的队列
 conversation_history = []
 
+# 当前任务的完整日志记录
+current_task_logs = []
+
+# 当前任务生成的文件列表
+generated_files = []
+
+# 上次任务摘要
+last_task_summary = ""
+
+# 摘要生成状态
+summary_generation_status = {
+    "in_progress": False,
+    "message": ""
+}
+
 # 获取项目根目录
 ROOT_DIR = Path(__file__).parent.parent
 # 定义静态文件目录
@@ -40,6 +59,18 @@ STATIC_DIR.mkdir(exist_ok=True)
 FRONTEND_DIR = STATIC_DIR / "frontend"
 # 定义index.html路径
 INDEX_HTML_PATH = FRONTEND_DIR / "index.html"
+
+# 读取配置文件
+try:
+    config = toml.load("config/config.toml")
+    openai_api_key = config.get("llm", {}).get("api_key", "")
+    openai_model = config.get("llm", {}).get("model", "gpt-4o")
+    if openai_api_key:
+        openai.api_key = openai_api_key
+except Exception as e:
+    print(f"读取配置文件失败: {str(e)}")
+    openai_api_key = ""
+    openai_model = "gpt-3.5-turbo"
 
 # 日志拦截器函数，用于捕获控制台输出
 def log_interceptor(message):
@@ -80,6 +111,10 @@ def log_interceptor(message):
         
         # 将处理后的消息放入队列
         message_queue.put(processed_message)
+        
+        # 添加到当前任务日志
+        if processed_message != "处理完成":
+            current_task_logs.append(processed_message)
         
         # 保存到对话历史
         if processed_message and isinstance(processed_message, str):
@@ -368,32 +403,282 @@ async def handle_prompt(prompt_data: dict):
         # 返回错误信息
         return {"status": "error", "message": error_msg}
 
-# 添加一个新函数，用于异步处理提示
-async def process_prompt_with_agent(agent, prompt):
-    """异步处理用户输入"""
+def identify_generated_files(prompt):
+    """从日志中识别生成的文件"""
+    global generated_files, current_task_logs
+    generated_files = []
+    
+    # 记录日志
+    print(f"开始识别生成的文件，日志行数: {len(current_task_logs)}")
+    
+    # 将日志合并为一个字符串
+    logs_text = "\n".join(current_task_logs)
+    
+    # 用于匹配文件路径的正则表达式模式
+    file_patterns = [
+        # 匹配常见的文件创建相关提示
+        r'(?:创建|保存|生成|写入)(?:了|到)?(?:文件|文档|图表|报表|图片|数据)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
+        # 匹配输出到文件的模式
+        r'输出(?:结果|内容|数据)?\s*(?:到|至|存储在)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
+        # 匹配保存文件的模式
+        r'(?:保存|存储)(?:到|在|至)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
+        # 匹配文件已创建/生成/保存的提示
+        r'文件\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?\s*(?:已|成功)?(?:创建|生成|保存)',
+        # 匹配文件名后跟随的路径模式
+        r'文件名(?:为|是|:)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
+        # 简单的文件路径匹配
+        r'[\'"]?((?:\.?/|\.\\|(?:[a-zA-Z]:\\))?[\w\-./\\]+\.(?:txt|csv|xlsx?|docx?|pptx?|pdf|json|xml|html?|css|js|py|java|cpp|c|h|md|log|ini|conf|cfg|ya?ml|sql|db|sqlite|zip|rar|gz|tar|bz2|7z|png|jpe?g|gif|bmp|svg|mp[34]|wav|avi|mp4|mov|flv|wmv))[\'"]?'
+    ]
+    
+    # 用于存储找到的文件路径
+    file_paths = set()
+    
+    # 使用正则表达式从日志中提取文件路径
+    for pattern in file_patterns:
+        matches = re.finditer(pattern, logs_text)
+        for match in matches:
+            file_path = match.group(1).strip('"\'')
+            if file_path and os.path.isfile(file_path):
+                file_paths.add(file_path)
+    
+    # 如果没有找到文件，尝试在项目目录下查找最近修改的文件
+    if not file_paths:
+        print("未从日志中找到文件，尝试查找最近修改的文件")
+        current_time = time.time()
+        # 查找项目目录下最近1分钟内创建或修改的文件
+        for root, _, files in os.walk("."):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    file_stat = os.stat(file_path)
+                    # 检查文件是否在最近1分钟内创建或修改
+                    if (current_time - file_stat.st_mtime < 60 or 
+                        current_time - file_stat.st_ctime < 60):
+                        # 排除日志和临时文件
+                        if not (file.endswith('.log') or file.startswith('.') or 
+                                'cache' in file_path.lower() or 'temp' in file_path.lower()):
+                            file_paths.add(file_path)
+                except Exception as e:
+                    print(f"获取文件信息失败: {file_path}, 错误: {str(e)}")
+    
+    # 将找到的文件路径添加到生成的文件列表中
+    for file_path in file_paths:
+        try:
+            # 获取文件的相对路径
+            rel_path = os.path.relpath(file_path)
+            generated_files.append(rel_path)
+            print(f"找到生成的文件: {rel_path}")
+        except Exception as e:
+            print(f"处理文件路径失败: {file_path}, 错误: {str(e)}")
+    
+    print(f"找到 {len(generated_files)} 个生成的文件")
+    return generated_files
+
+# 为AI生成任务总结
+async def generate_task_summary(prompt, logs):
+    """使用OpenAI API生成任务执行结果的摘要"""
+    global summary_generation_status, last_task_summary
+    
     try:
-        # 运行代理并获取结果
+        # 更新摘要生成状态
+        summary_generation_status = {
+            "in_progress": True,
+            "message": "正在生成任务摘要..."
+        }
+        
+        # 如果没有配置API密钥，则返回提示信息
+        if not openai_api_key:
+            last_task_summary = "无法生成详细摘要：未配置OpenAI API密钥。请在config/config.toml中配置。"
+            summary_generation_status = {
+                "in_progress": False,
+                "message": "未配置API密钥，无法生成摘要"
+            }
+            return last_task_summary
+            
+        logs_text = "\n".join(logs)
+        print(f"开始为任务生成摘要，日志长度：{len(logs_text)}")
+        
+        # 构建提示信息
+        messages = [
+            {"role": "system", "content": "你是一个任务执行分析专家，需要分析执行日志并提供简洁的总结。"},
+            {"role": "user", "content": f"""请分析以下任务执行日志，并简洁地总结以下内容：
+1. 任务的主要目标是什么
+2. 任务是否成功完成
+3. 生成了哪些文件及其主要内容和用途
+4. 有没有遇到明显的错误或问题
+
+请用中文回答，简明扼要，不超过300字。
+
+任务提示: {prompt}
+
+执行日志:
+{logs_text[:50000]}  # 限制日志长度，防止超出token限制
+"""}
+        ]
+        
+        # 重试机制
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # 使用异步方式调用OpenAI API
+                response = await asyncio.to_thread(
+                    openai.chat.completions.create,
+                    model=openai_model,
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=500
+                )
+                
+                # 提取摘要内容
+                if response.choices and len(response.choices) > 0:
+                    last_task_summary = response.choices[0].message.content
+                    print("成功生成任务摘要")
+                    break
+                else:
+                    retry_count += 1
+                    await asyncio.sleep(1)  # 等待一秒后重试
+            except Exception as e:
+                error_message = f"重试 {retry_count+1}/{max_retries} 失败: {str(e)}"
+                print(error_message)
+                retry_count += 1
+                await asyncio.sleep(2)  # 出错后等待稍长时间
+                
+                # 如果是最后一次重试失败，设置错误摘要
+                if retry_count >= max_retries:
+                    last_task_summary = f"无法生成详细摘要：连接API服务器失败，请检查网络或API配置。错误信息: {str(e)}"
+        
+    except Exception as e:
+        print(f"生成任务摘要时出错: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        last_task_summary = f"生成摘要时出错: {str(e)}"
+    finally:
+        # 更新摘要生成状态
+        summary_generation_status = {
+            "in_progress": False,
+            "message": ""
+        }
+        return last_task_summary
+
+# 添加异步处理提示的函数
+async def process_prompt_with_agent(agent, prompt):
+    """使用代理处理提示词"""
+    global current_task_logs, message_queue
+    
+    # 记录开始时间
+    start_time = time.time()
+    
+    # 清空当前任务日志
+    current_task_logs = []
+    
+    try:
+        # 尝试运行代理
         result = await agent.run(prompt)
         
-        # 处理结果 - 如果结果很长，按行分割发送
-        print("处理完成，结果如下:")
-        if isinstance(result, str) and result:
+        # 处理结果
+        if result:
             lines = result.split('\n')
             for line in lines:
-                if line.strip():  # 跳过空行
+                if line.strip():
+                    # 添加到日志
                     log_interceptor(line)
-        else:
-            log_interceptor(str(result))
         
-        # 发送处理完成的消息
+        # 添加处理完成的消息
         log_interceptor("处理完成")
+        
+        # 识别生成的文件
+        identify_generated_files(prompt)
+        
+        # 将所有日志合并为一个文本
+        logs_text = "\n".join(current_task_logs)
+        
+        # 异步生成任务摘要
+        asyncio.create_task(generate_task_summary(prompt, logs_text))
+        
+        # 记录耗时
+        elapsed_time = time.time() - start_time
+        print(f"任务处理完成，耗时: {elapsed_time:.2f}秒")
+        
     except Exception as e:
-        # 记录详细错误
-        error_msg = f"执行失败: {str(e)}"
-        print(error_msg)
-        # 向前端发送简化的错误消息
-        log_interceptor(f"执行错误: {str(e)}")
+        import traceback
+        error_message = f"处理过程中出错: {str(e)}"
+        print(error_message)
+        print(traceback.format_exc())
+        
+        # 添加错误消息到日志
+        log_interceptor(error_message)
+        
+        # 返回简化的错误消息给前端
         log_interceptor("处理完成")
+        
+        # 即使出错也尝试识别文件并生成摘要
+        identify_generated_files(prompt)
+        logs_text = "\n".join(current_task_logs)
+        asyncio.create_task(generate_task_summary(prompt, logs_text))
+
+# 添加新的API端点
+@app.get("/api/files")
+async def get_generated_files():
+    """获取当前任务生成的文件列表和任务摘要"""
+    file_list = []
+    
+    # 构建文件对象列表
+    for file_path in generated_files:
+        try:
+            # 根据文件路径是字符串还是字典来获取文件信息
+            actual_path = file_path if isinstance(file_path, str) else file_path.get("path", "")
+            if not actual_path:
+                continue
+                
+            file_info = os.stat(actual_path)
+            file_name = os.path.basename(actual_path)
+            file_list.append({
+                "name": file_name,
+                "path": actual_path,
+                "size": file_info.st_size,
+                "created": file_info.st_ctime
+            })
+        except Exception as e:
+            path_str = file_path if isinstance(file_path, str) else str(file_path)
+            print(f"获取文件信息失败: {path_str}, 错误: {str(e)}")
+    
+    # 返回文件列表和摘要
+    return {
+        "files": file_list,
+        "summary": last_task_summary,
+        "summary_status": summary_generation_status
+    }
+
+@app.get("/api/download/{file_name}")
+async def download_file(file_name: str):
+    """下载指定的文件"""
+    # 查找匹配的文件
+    # 兼容generated_files为字符串列表或字典列表的情况
+    matching_files = []
+    for f in generated_files:
+        if isinstance(f, str):
+            if os.path.basename(f) == file_name:
+                matching_files.append(f)
+        elif isinstance(f, dict) and f.get("name") == file_name:
+            matching_files.append(f.get("path"))
+    
+    if not matching_files:
+        raise HTTPException(status_code=404, detail=f"文件未找到: {file_name}")
+    
+    file_path = matching_files[0]
+    
+    # 检查文件是否存在
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    
+    # 返回文件
+    return FileResponse(
+        path=file_path, 
+        filename=file_name,
+        media_type="application/octet-stream"
+    )
 
 @app.get("/api/history")
 async def get_history():

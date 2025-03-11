@@ -35,8 +35,10 @@
             padding: 20px;
             overflow-y: auto;
             background-color: #f9f9f9;
+            display: flex;
+            flex-direction: column;
         }
-        h1, h2 {
+        h1, h2, h3 {
             color: #333;
             margin-top: 0;
         }
@@ -74,9 +76,10 @@
             padding: 15px;
             border-radius: 5px;
             min-height: 300px;
-            max-height: 70vh;
+            max-height: 50vh;
             overflow-y: auto;
             border: 1px solid #ddd;
+            flex: 1;
         }
         .message {
             margin-bottom: 10px;
@@ -136,6 +139,106 @@
             font-size: 85%;
             padding: 0.2em 0.4em;
         }
+        /* 文件列表样式 */
+        .result-section {
+            margin-top: 20px;
+            display: none;
+        }
+        .file-list {
+            margin-top: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .file-item {
+            padding: 10px 15px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: white;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        .file-name {
+            font-weight: 500;
+        }
+        .file-meta {
+            color: #888;
+            font-size: 0.85em;
+        }
+        .file-download {
+            padding: 5px 10px;
+            background: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .file-download:hover {
+            background: #219653;
+        }
+        .summary-section {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #4a6bdf;
+            display: none;
+        }
+        .tab-container {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        .tab {
+            padding: 8px 16px;
+            background: #e9ecef;
+            border: 1px solid #dee2e6;
+            border-bottom: none;
+            border-radius: 5px 5px 0 0;
+            cursor: pointer;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background: #f5f5f5;
+            font-weight: 500;
+        }
+        /* 摘要加载状态 */
+        .summary-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            flex-direction: column;
+            background: #f8f9fa;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .summary-loading .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        .summary-loading-text {
+            font-size: 14px;
+            color: #666;
+        }
+        /* 结果面板状态指示器 */
+        .results-status {
+            padding: 10px;
+            background: #fff8e1;
+            border-left: 4px solid #ffc107;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            color: #795548;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -148,8 +251,41 @@
             <div id="status" class="status"></div>
         </div>
         <div class="log-panel">
-            <h2>系统日志</h2>
-            <div id="logs"></div>
+            <div class="tab-container">
+                <div class="tab active" data-tab="logs">系统日志</div>
+                <div class="tab" data-tab="results">任务结果</div>
+            </div>
+            
+            <!-- 日志区域 -->
+            <div id="logs-container">
+                <div id="logs"></div>
+            </div>
+            
+            <!-- 任务结果区域 -->
+            <div id="results-container" style="display:none; flex: 1; display: flex; flex-direction: column;">
+                <!-- 结果状态 -->
+                <div class="results-status" id="results-status"></div>
+                
+                <!-- 文件列表 -->
+                <div class="result-section" id="file-section">
+                    <h3>生成的文件</h3>
+                    <div class="file-list" id="file-list">
+                        <!-- 文件列表将在这里动态生成 -->
+                    </div>
+                </div>
+                
+                <!-- 任务总结加载状态 -->
+                <div class="summary-loading" id="summary-loading" style="display: none;">
+                    <div class="spinner"></div>
+                    <div class="summary-loading-text">正在生成任务摘要...</div>
+                </div>
+                
+                <!-- 任务总结 -->
+                <div class="summary-section" id="summary-section">
+                    <h3>任务总结</h3>
+                    <div id="task-summary" class="formatted-text"></div>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -159,6 +295,151 @@
         const sendButton = document.getElementById('send');
         const logs = document.getElementById('logs');
         const statusDiv = document.getElementById('status');
+        const fileSection = document.getElementById('file-section');
+        const fileList = document.getElementById('file-list');
+        const summarySection = document.getElementById('summary-section');
+        const taskSummary = document.getElementById('task-summary');
+        const summaryLoading = document.getElementById('summary-loading');
+        const resultsStatus = document.getElementById('results-status');
+        const tabs = document.querySelectorAll('.tab');
+        const logsContainer = document.getElementById('logs-container');
+        const resultsContainer = document.getElementById('results-container');
+        
+        // 切换标签页
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                // 移除所有标签页的活动状态
+                tabs.forEach(t => t.classList.remove('active'));
+                // 添加当前标签页的活动状态
+                tab.classList.add('active');
+                
+                // 显示对应的内容区域
+                const tabName = tab.getAttribute('data-tab');
+                if (tabName === 'logs') {
+                    logsContainer.style.display = 'block';
+                    resultsContainer.style.display = 'none';
+                } else {
+                    logsContainer.style.display = 'none';
+                    resultsContainer.style.display = 'flex';
+                    
+                    // 切换到结果标签时获取最新的文件列表和总结
+                    fetchGeneratedFiles();
+                }
+            });
+        });
+        
+        // 获取生成的文件列表
+        async function fetchGeneratedFiles() {
+            try {
+                const response = await fetch('/api/files');
+                
+                if (!response.ok) {
+                    throw new Error('获取文件列表失败');
+                }
+                
+                const data = await response.json();
+                
+                // 处理文件列表
+                if (data.files && data.files.length > 0) {
+                    renderFileList(data.files);
+                    fileSection.style.display = 'block';
+                } else {
+                    fileSection.style.display = 'none';
+                }
+                
+                // 处理摘要生成状态
+                if (data.summary_status && data.summary_status.in_progress) {
+                    // 显示加载状态
+                    summaryLoading.style.display = 'flex';
+                    summarySection.style.display = 'none';
+                    
+                    // 显示状态消息
+                    const loadingText = document.querySelector('.summary-loading-text');
+                    if (loadingText) {
+                        loadingText.textContent = data.summary_status.message || '正在生成任务摘要...';
+                    }
+                    
+                    // 定时刷新状态
+                    setTimeout(fetchGeneratedFiles, 2000);
+                } else {
+                    // 隐藏加载状态
+                    summaryLoading.style.display = 'none';
+                    
+                    // 处理任务总结
+                    if (data.summary && data.summary.trim()) {
+                        taskSummary.innerHTML = formatText(data.summary);
+                        summarySection.style.display = 'block';
+                    } else {
+                        summarySection.style.display = 'none';
+                    }
+                }
+                
+                // 如果有任何状态消息要显示
+                if (data.summary_status && data.summary_status.message) {
+                    resultsStatus.textContent = data.summary_status.message;
+                    resultsStatus.style.display = 'block';
+                } else {
+                    resultsStatus.style.display = 'none';
+                }
+                
+            } catch (error) {
+                console.error('获取文件列表失败:', error);
+                resultsStatus.textContent = `获取任务结果失败: ${error.message}`;
+                resultsStatus.style.display = 'block';
+            }
+        }
+        
+        // 渲染文件列表
+        function renderFileList(files) {
+            fileList.innerHTML = '';
+            
+            files.forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                
+                // 格式化文件大小
+                const fileSize = formatFileSize(file.size);
+                
+                // 格式化创建时间
+                const createDate = new Date(file.created * 1000).toLocaleString();
+                
+                fileItem.innerHTML = `
+                    <div class="file-info">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-meta">${fileSize} · 创建于 ${createDate}</div>
+                    </div>
+                    <button class="file-download" data-filename="${file.name}">下载</button>
+                `;
+                
+                fileList.appendChild(fileItem);
+            });
+            
+            // 添加下载按钮事件
+            document.querySelectorAll('.file-download').forEach(button => {
+                button.addEventListener('click', () => {
+                    const fileName = button.getAttribute('data-filename');
+                    downloadFile(fileName);
+                });
+            });
+        }
+        
+        // 下载文件
+        function downloadFile(fileName) {
+            window.open(`/api/download/${fileName}`, '_blank');
+        }
+        
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes < 1024) {
+                return bytes + ' B';
+            } else if (bytes < 1024 * 1024) {
+                return (bytes / 1024).toFixed(2) + ' KB';
+            } else if (bytes < 1024 * 1024 * 1024) {
+                return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            } else {
+                return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+            }
+        }
         
         // 简单的文本格式化，只处理简单的代码块
         function formatText(text) {
@@ -250,6 +531,25 @@
                 } else if (data.content.includes('处理完成')) {
                     // 如果收到处理完成的消息，恢复输入状态
                     updateStatus(false, '任务已完成');
+                    // 获取生成的文件列表
+                    fetchGeneratedFiles();
+                    // 自动切换到结果标签
+                    document.querySelector('.tab[data-tab="results"]').click();
+                    // 每隔2秒检查一次摘要生成状态
+                    const checkInterval = setInterval(() => {
+                        fetch('/api/files')
+                            .then(response => response.json())
+                            .then(data => {
+                                if (!data.summary_status || !data.summary_status.in_progress) {
+                                    clearInterval(checkInterval);
+                                }
+                                fetchGeneratedFiles();
+                            })
+                            .catch(error => {
+                                console.error('检查摘要状态失败:', error);
+                                clearInterval(checkInterval);
+                            });
+                    }, 2000);
                     setTimeout(() => updateStatus(false, ''), 3000);
                 } else {
                     // 使用简单格式化
@@ -323,6 +623,9 @@
                 // 状态将在收到"处理完成"消息时自动重置
                 promptInput.value = '';
                 updateStatus(true, '正在处理请求...');
+                
+                // 切换到日志标签页
+                document.querySelector('.tab[data-tab="logs"]').click();
                 
             } catch (error) {
                 console.error('发送消息失败:', error);
