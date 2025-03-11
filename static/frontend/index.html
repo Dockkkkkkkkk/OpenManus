@@ -164,14 +164,54 @@
         function formatText(text) {
             if (!text) return '';
             
+            // 转义HTML以避免XSS攻击
+            text = text.replace(/&/g, '&amp;')
+                       .replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;');
+            
             // 替换连续的空格为保留格式的空格
             text = text.replace(/ {2}/g, ' &nbsp;');
             
-            // 处理代码块，不使用任何复杂的Markdown解析
-            text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
+            // 处理代码块
+            text = text.replace(/```([\s\S]*?)```/g, function(match, code) {
+                return '<pre>' + code + '</pre>';
+            });
             
             // 处理内联代码
             text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // 处理标题
+            text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+            text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+            text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+            
+            // 处理粗体
+            text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // 处理斜体
+            text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            
+            // 处理无序列表
+            text = text.replace(/^\s*[\-\*]\s+(.*$)/gm, '<li>$1</li>');
+            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ul><ul>');
+            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ul>$1</ul>');
+            
+            // 处理有序列表
+            text = text.replace(/^\s*(\d+)\.\s+(.*$)/gm, '<li>$2</li>');
+            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ol><ol>');
+            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ol>$1</ol>');
+            
+            // 处理链接
+            text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            
+            // 处理段落
+            let paragraphs = text.split(/\n\s*\n/);
+            for (let i = 0; i < paragraphs.length; i++) {
+                if (!paragraphs[i].trim().startsWith('<')) {
+                    paragraphs[i] = '<p>' + paragraphs[i] + '</p>';
+                }
+            }
+            text = paragraphs.join('\n\n');
             
             return text;
         }

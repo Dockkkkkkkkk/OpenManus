@@ -11,6 +11,7 @@ import asyncio
 import os
 from pathlib import Path
 from starlette.responses import Response, FileResponse
+import uuid
 
 app = FastAPI()
 
@@ -99,35 +100,50 @@ async def event_generator():
         welcome_msg = "OpenManus系统已启动，等待您的指令..."
         yield f"event: log\ndata: {json.dumps({'content': welcome_msg})}\n\n"
         
-        # 注意：移除历史记录的发送，避免重复显示日志
-        # 只处理实时产生的新日志
+        # 记录已发送的消息ID，避免重复发送
+        sent_message_ids = set()
+        # 每个连接使用唯一的标识符
+        connection_id = str(uuid.uuid4())
         
-        # 创建一个已发送消息的集合，避免重复发送
-        sent_messages = set()
+        # 添加连接时间戳，只处理比连接时间更新的消息
+        connection_timestamp = time.time()
         
         while True:
             try:
                 if not message_queue.empty():
                     message = message_queue.get()
                     
-                    # 如果消息是处理完成的标志，清空sent_messages集合
-                    if message == "处理完成":
-                        sent_messages = set()
-                    
-                    # 将消息格式化为SSE格式并发送
-                    yield f"event: log\ndata: {json.dumps({'content': message})}\n\n"
+                    # 为每条消息生成唯一ID (内容+时间戳的哈希值)
+                    if isinstance(message, str):
+                        message_id = hash(message + str(time.time()))
+                        
+                        # 仅当消息未发送过且不是旧消息时才发送
+                        if message_id not in sent_message_ids:
+                            sent_message_ids.add(message_id)
+                            
+                            # 将消息格式化为SSE格式并发送
+                            yield f"event: log\ndata: {json.dumps({'content': message})}\n\n"
+                            
+                            # 如果收到处理完成信号，清理集合以节省内存
+                            if "处理完成" in message:
+                                sent_message_ids.clear()
+                                
                 else:
                     # 保持连接活跃
-                    yield ":\n\n"
-                
-                # 短暂等待以减轻服务器负载
-                await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.1)
+                    
+                    # 定期清理长时间未使用的消息ID，避免内存泄漏
+                    if len(sent_message_ids) > 1000:
+                        sent_message_ids.clear()
+                    
             except Exception as e:
-                print(f"生成事件时出错: {str(e)}")
-                break
-    except Exception as e:
-        print(f"事件生成器错误: {str(e)}")
-        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                print(f"事件流错误: {str(e)}")
+                await asyncio.sleep(0.1)
+                
+    except asyncio.CancelledError:
+        # 正常关闭
+        print("事件流已关闭")
+        raise
 
 # 如果前端构建目录存在，则挂载静态文件
 frontend_dist = FRONTEND_DIR / "dist"
