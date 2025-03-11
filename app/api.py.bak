@@ -16,11 +16,6 @@ from starlette.responses import Response, FileResponse
 import uuid
 import toml
 import openai
-try:
-    from ai_file_identifier import AIFileIdentifier
-except ImportError:
-    print("注意: AI文件识别器模块未找到，将使用传统方法识别文件")
-    pass
 
 app = FastAPI()
 
@@ -74,38 +69,23 @@ try:
     
     # 设置OpenAI客户端配置
     if openai_api_key:
-        # 确保安装了最新的openai库
-        try:
+        if openai_base_url:
+            # 如果有自定义base_url，则同时设置base_url和api_key
+            print(f"使用自定义API基础URL: {openai_base_url}")
+            openai.base_url = openai_base_url
             # 使用新的客户端方式
-            if openai_base_url:
-                print(f"使用自定义API基础URL: {openai_base_url}")
-                client = openai.OpenAI(
-                    api_key=openai_api_key,
-                    base_url=openai_base_url
-                )
-                # 同时设置全局配置（兼容旧代码）
-                openai.api_key = openai_api_key
-                openai.base_url = openai_base_url
-            else:
-                # 否则仅设置api_key
-                client = openai.OpenAI(api_key=openai_api_key)
-                openai.api_key = openai_api_key
-                
-            # 测试客户端连接
-            print("测试OpenAI客户端连接...")
-            models = client.models.list()
-            print(f"连接成功! 可用模型数量: {len(models.data) if hasattr(models, 'data') else '未知'}")
-        except Exception as client_error:
-            print(f"创建OpenAI客户端时出错: {str(client_error)}")
-            # 尝试使用旧版兼容模式
-            print("尝试使用兼容模式...")
-            openai.api_key = openai_api_key
-            if openai_base_url:
-                openai.api_base = openai_base_url
-            client = None
-    else:
-        client = None
-        print("警告: 未配置OpenAI API密钥")
+            client = openai.OpenAI(
+                api_key=openai_api_key,
+                base_url=openai_base_url
+            )
+        else:
+            # 否则仅设置api_key
+            client = openai.OpenAI(api_key=openai_api_key)
+        
+        # 同样设置旧版API兼容模式
+        openai.api_key = openai_api_key
+        if openai_base_url:
+            openai.base_url = openai_base_url
 except Exception as e:
     print(f"读取配置文件失败: {str(e)}")
     openai_api_key = ""
@@ -518,7 +498,7 @@ def identify_generated_files(prompt):
 # 为AI生成任务总结
 async def generate_task_summary(prompt, logs):
     """使用OpenAI API生成任务执行结果的摘要"""
-    global summary_generation_status, last_task_summary, client
+    global summary_generation_status, last_task_summary
     
     try:
         # 更新摘要生成状态
@@ -563,132 +543,33 @@ async def generate_task_summary(prompt, logs):
         
         while retry_count < max_retries:
             try:
-                print(f"正在调用OpenAI API (重试 {retry_count}/{max_retries})...")
+                # 使用异步方式调用OpenAI API
+                response = await asyncio.to_thread(
+                    openai.chat.completions.create,
+                    model=openai_model,
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=500
+                )
                 
-                # 尝试使用不同的方法调用API
-                if client:
-                    # 方法1: 使用新版客户端，非流式
-                    try:
-                        print("使用新版客户端API...")
-                        response = await asyncio.to_thread(
-                            lambda: client.chat.completions.create(
-                                model=openai_model,
-                                messages=messages,
-                                temperature=0.2,
-                                max_tokens=500
-                            )
-                        )
-                        
-                        if response.choices and len(response.choices) > 0:
-                            last_task_summary = response.choices[0].message.content
-                            print("成功生成任务摘要")
-                            break
-                    except Exception as e1:
-                        print(f"新版客户端API调用失败: {str(e1)}")
-                        
-                        # 方法2: 使用新版客户端，流式请求
-                        try:
-                            print("尝试使用流式请求...")
-                            stream_response = await asyncio.to_thread(
-                                lambda: client.chat.completions.create(
-                                    model=openai_model,
-                                    messages=messages,
-                                    temperature=0.2,
-                                    max_tokens=500,
-                                    stream=True
-                                )
-                            )
-                            
-                            # 处理流式响应
-                            full_response = ""
-                            for chunk in stream_response:
-                                if hasattr(chunk.choices[0], 'delta') and hasattr(chunk.choices[0].delta, 'content'):
-                                    content = chunk.choices[0].delta.content
-                                    if content:
-                                        full_response += content
-                            
-                            if full_response:
-                                last_task_summary = full_response
-                                print("成功生成任务摘要(流式)")
-                                break
-                        except Exception as e2:
-                            print(f"流式请求失败: {str(e2)}")
-                
-                # 方法3: 使用旧版API接口（兼容模式）
-                try:
-                    print("尝试使用兼容模式...")
-                    if not 'api_base' in dir(openai) and openai_base_url:
-                        openai.api_base = openai_base_url
-                    
-                    response = await asyncio.to_thread(
-                        lambda: openai.ChatCompletion.create(
-                            model=openai_model,
-                            messages=messages,
-                            temperature=0.2,
-                            max_tokens=500
-                        )
-                    )
-                    
-                    if response.choices and len(response.choices) > 0:
-                        last_task_summary = response.choices[0].message.content
-                        print("成功生成任务摘要(兼容模式)")
-                        break
-                except Exception as e3:
-                    print(f"兼容模式失败: {str(e3)}")
-                
-                # 方法4：使用直接HTTP请求（最后的尝试）
-                try:
-                    import httpx
-                    print("尝试使用直接HTTP请求...")
-                    
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {openai_api_key}"
-                    }
-                    
-                    url = f"{openai_base_url if openai_base_url else 'https://api.openai.com'}/v1/chat/completions"
-                    
-                    payload = {
-                        "model": openai_model,
-                        "messages": messages,
-                        "temperature": 0.2,
-                        "max_tokens": 500
-                    }
-                    
-                    async with httpx.AsyncClient() as http_client:
-                        response = await http_client.post(
-                            url,
-                            headers=headers,
-                            json=payload,
-                            timeout=30.0
-                        )
-                        
-                        if response.status_code == 200:
-                            result = response.json()
-                            if "choices" in result and len(result["choices"]) > 0:
-                                last_task_summary = result["choices"][0]["message"]["content"]
-                                print("成功生成任务摘要(HTTP请求)")
-                                break
-                        else:
-                            print(f"HTTP请求失败: {response.status_code} {response.text}")
-                except Exception as e4:
-                    print(f"HTTP请求出错: {str(e4)}")
-                
-                # 如果所有方法都失败，增加重试计数
-                retry_count += 1
-                await asyncio.sleep(2)  # 等待2秒后重试
-                
+                # 提取摘要内容
+                if response.choices and len(response.choices) > 0:
+                    last_task_summary = response.choices[0].message.content
+                    print("成功生成任务摘要")
+                    break
+                else:
+                    retry_count += 1
+                    await asyncio.sleep(1)  # 等待一秒后重试
             except Exception as e:
                 error_message = f"重试 {retry_count+1}/{max_retries} 失败: {str(e)}"
                 print(error_message)
                 retry_count += 1
-                await asyncio.sleep(2)  # 出错后等待2秒
+                await asyncio.sleep(2)  # 出错后等待稍长时间
+                
+                # 如果是最后一次重试失败，设置错误摘要
+                if retry_count >= max_retries:
+                    last_task_summary = f"无法生成详细摘要：连接API服务器失败，请检查网络或API配置。错误信息: {str(e)}"
         
-        # 如果所有重试都失败
-        if retry_count >= max_retries and not last_task_summary:
-            last_task_summary = "无法生成详细摘要：连接API服务器失败，请检查网络或API配置。"
-            print("所有重试尝试均失败")
-            
     except Exception as e:
         print(f"生成任务摘要时出错: {str(e)}")
         import traceback

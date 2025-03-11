@@ -3,3 +3,5 @@ manus\Scripts\activate
 pip install -r requirements.txt
 
 python main.py
+
+manus\Scripts\activate
