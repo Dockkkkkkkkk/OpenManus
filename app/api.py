@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from typing import Annotated, List, Dict, Any
+from typing import Annotated, List, Dict, Any, Optional
 import json
 import queue
 import time
@@ -16,6 +16,11 @@ from starlette.responses import Response, FileResponse
 import uuid
 import toml
 import openai
+import sys
+import random
+import traceback
+from datetime import datetime, timedelta
+import platform
 try:
     from ai_file_identifier import AIFileIdentifier
 except ImportError:
@@ -33,37 +38,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 创建消息队列
-message_queue = queue.Queue()
-
-# 用于存储对话历史的队列
-conversation_history = []
-
-# 当前任务的完整日志记录
-current_task_logs = []
-
-# 当前任务生成的文件列表
+# 全局变量
 generated_files = []
-
-# 上次任务摘要
+current_task_logs = []
+pure_logs = []
 last_task_summary = ""
+completion_status = {"in_progress": False}
+summary_generation_status = {"in_progress": False}
+conversation_history = []
+logs_processor_callback = None  # 存储日志处理回调函数
 
-# 摘要生成状态
-summary_generation_status = {
-    "in_progress": False,
-    "message": ""
-}
+# 创建消息队列，用于存储日志消息
+message_queue = asyncio.Queue()
+
+# 创建OpenAI客户端
+client = None
 
 # 获取项目根目录
 ROOT_DIR = Path(__file__).parent.parent
 # 定义静态文件目录
-STATIC_DIR = ROOT_DIR / "static"
+STATIC_DIR = ROOT_DIR / "app" / "static"  # 更新静态文件目录路径
 # 确保静态目录存在
-STATIC_DIR.mkdir(exist_ok=True)
+STATIC_DIR.mkdir(exist_ok=True, parents=True)
 # 定义前端构建输出目录
-FRONTEND_DIR = STATIC_DIR / "frontend"
+FRONTEND_DIR = STATIC_DIR
 # 定义index.html路径
 INDEX_HTML_PATH = FRONTEND_DIR / "index.html"
+# 创建CSS和JS目录
+CSS_DIR = STATIC_DIR / "css"
+CSS_DIR.mkdir(exist_ok=True)
+JS_DIR = STATIC_DIR / "js"
+JS_DIR.mkdir(exist_ok=True)
 
 # 读取配置文件
 try:
@@ -113,113 +118,185 @@ except Exception as e:
     openai_base_url = ""
     client = None
 
-# 日志拦截器函数，用于捕获控制台输出
 def log_interceptor(message):
-    """将日志消息添加到队列中"""
+    """拦截日志消息并将其添加到消息队列
+    
+    参数:
+        message (str): 日志消息
+    """
+    global message_queue, current_task_logs, conversation_history, generated_files, logs_processor_callback
+    
+    if not message_queue:
+        return
+
     try:
-        print(f"日志拦截器接收到消息: {message}")
+        # 移除行首可能存在的前缀和颜色标记
+        # 例如：2024-01-01 12:34:56 | INFO | app.module: 
+        cleaned_message = re.sub(r'^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}.\d+\s+\|\s+\w+\s+\|\s+[\w\.]+:\s*', '', message)
         
-        # 处理日志消息，去除前缀
-        processed_message = message
-        if message and isinstance(message, str):
-            # 检查是否包含常见的日志前缀模式
-            if " | " in message:
-                # 尝试去除时间戳和日志级别前缀，例如：2025-03-11 16:58:22.527 | INFO     | app.agent.toolcall:think:54 - 
-                parts = message.split(" | ")
-                if len(parts) >= 3 and " - " in parts[2]:
-                    # 提取实际内容
-                    content_parts = parts[2].split(" - ", 1)
-                    if len(content_parts) > 1:
-                        processed_message = content_parts[1].strip()
-                # 处理简单的两部分格式：INFO | 内容
-                elif len(parts) == 2:
-                    processed_message = parts[1].strip()
-            # 如果是INFO、WARNING等简单前缀，也去除
-            elif any(message.startswith(prefix) for prefix in ["INFO | ", "WARNING | ", "ERROR | ", "INFO: ", "WARNING: ", "ERROR: "]):
-                for prefix in ["INFO | ", "WARNING | ", "ERROR | ", "INFO: ", "WARNING: ", "ERROR: "]:
-                    if message.startswith(prefix):
-                        processed_message = message[len(prefix):].strip()
-                        break
-            
-            # 处理带冒号的情况：INFO： 或 WARNING： 等
-            elif "INFO：" in message or "WARNING：" in message or "ERROR：" in message:
-                if "INFO：" in message:
-                    processed_message = message.split("INFO：", 1)[1].strip()
-                elif "WARNING：" in message:
-                    processed_message = message.split("WARNING：", 1)[1].strip()
-                elif "ERROR：" in message:
-                    processed_message = message.split("ERROR：", 1)[1].strip()
+        # 移除INFO/WARNING/ERROR前缀
+        cleaned_message = re.sub(r'^(INFO|WARNING|ERROR)\s*[:|]\s*', '', cleaned_message)
+        cleaned_message = re.sub(r'^(INFO|WARNING|ERROR)\s*\|\s*', '', cleaned_message)
+        
+        # 移除其他可能的前缀，如 | INFO | 
+        cleaned_message = re.sub(r'^\|\s*\w+\s*\|\s*', '', cleaned_message)
+        
+        # 移除一些特殊的标记符，可能导致前端显示问题
+        cleaned_message = cleaned_message.rstrip('|').strip()
+        
+        # 打印调试信息
+        print(f"日志拦截器: 原始消息 [{message[:50]}...] -> 清理后 [{cleaned_message[:50]}...]")
+        
+        # 如果有日志处理回调函数，调用它
+        if logs_processor_callback and callable(logs_processor_callback):
+            logs_processor_callback(cleaned_message)
+        
+        # 检查是否包含文件生成信息
+        file_msg = None
+        file_patterns = [
+            r'(?:saved|created|generated|written)(?:\s*to)?\s*(?:file)?\s*[:]?\s*(?:as|to)?[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?',
+            r'file\s*(?:saved|created|generated)\s*[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?',
+            r'generated file\s*[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?'
+        ]
+        
+        for pattern in file_patterns:
+            match = re.search(pattern, cleaned_message)
+            if match:
+                file_path = match.group('filepath')
+                if file_path and os.path.exists(file_path):
+                    file_msg = {"content": cleaned_message, "file": file_path}
+                    if file_path not in generated_files:
+                        generated_files.append(file_path)
+                        print(f"识别到新生成的文件: {file_path}")
+                    break
         
         # 将处理后的消息放入队列
-        message_queue.put(processed_message)
+        if file_msg:
+            message_queue.put_nowait(file_msg)
+        else:
+            message_queue.put_nowait({
+                "content": cleaned_message
+            })
         
         # 添加到当前任务日志
-        if processed_message != "处理完成":
-            current_task_logs.append(processed_message)
+        if cleaned_message != "处理完成":
+            current_task_logs.append(cleaned_message)
         
         # 保存到对话历史
-        if processed_message and isinstance(processed_message, str):
-            conversation_history.append({"role": "system", "content": processed_message})
+        if cleaned_message and isinstance(cleaned_message, str):
+            conversation_history.append({"role": "system", "content": cleaned_message})
             # 限制历史记录长度
             if len(conversation_history) > 100:
                 conversation_history.pop(0)
     except Exception as e:
-        print(f"日志拦截器错误: {e}")
+        print(f"Failed to add message to queue: {str(e)}")
 
 async def event_generator():
-    """生成SSE事件流"""
-    # 发送连接确认消息
-    yield "event: connect\ndata: {\"status\":\"connected\"}\n\n"
+    """生成服务器发送事件流"""
+    global message_queue
     
+    # 创建此连接的唯一标识符
+    connection_id = str(uuid.uuid4())
+    print(f"新的SSE连接已建立: {connection_id}")
+    
+    # 记录已发送消息的ID
+    sent_message_ids = set()
+    
+    # 发送初始连接事件
+    yield "event: connect\ndata: {}\n\n"
+    
+    # 发送一个欢迎消息
     try:
-        # 发送一个欢迎消息
-        welcome_msg = "OpenManus系统已启动，等待您的指令..."
-        yield f"event: log\ndata: {json.dumps({'content': welcome_msg})}\n\n"
-        
-        # 记录已发送的消息ID，避免重复发送
-        sent_message_ids = set()
-        # 每个连接使用唯一的标识符
-        connection_id = str(uuid.uuid4())
-        
-        # 添加连接时间戳，只处理比连接时间更新的消息
-        connection_timestamp = time.time()
-        
-        while True:
+        welcome_msg = "已连接到OpenManus系统"
+        message_id = str(uuid.uuid4())
+        yield f"data: {{\"id\": \"{message_id}\", \"type\": \"log\", \"message\": \"{welcome_msg}\"}}\n\n"
+    except Exception as e:
+        print(f"欢迎消息发送错误: {str(e)}")
+    
+    # 创建一个副本队列，不影响其他连接
+    private_queue = asyncio.Queue()
+    
+    # 任务运行状态
+    running = True
+    
+    while running:
+        try:
+            # 获取所有队列中的消息，但不重复发送
             try:
-                if not message_queue.empty():
-                    message = message_queue.get()
+                # 从主队列获取一条消息
+                try:
+                    message = await asyncio.wait_for(message_queue.get(), timeout=0.1)
                     
-                    # 为每条消息生成唯一ID (内容+时间戳的哈希值)
-                    if isinstance(message, str):
-                        message_id = hash(message + str(time.time()))
-                        
-                        # 仅当消息未发送过且不是旧消息时才发送
-                        if message_id not in sent_message_ids:
-                            sent_message_ids.add(message_id)
-                            
-                            # 将消息格式化为SSE格式并发送
-                            yield f"event: log\ndata: {json.dumps({'content': message})}\n\n"
-                            
-                            # 如果收到处理完成信号，清理集合以节省内存
-                            if "处理完成" in message:
-                                sent_message_ids.clear()
+                    # 生成消息ID（基于内容和时间戳）
+                    message_id = str(uuid.uuid4())
+                    
+                    # 如果消息带有任务完成标记，设置running为False
+                    if isinstance(message, dict) and message.get("content") == "处理完成":
+                        print(f"连接 {connection_id} 检测到任务完成信号")
+                        running = False
+                        # 发送完成事件
+                        completion_id = str(uuid.uuid4())
+                        yield f"data: {{\"id\": \"{completion_id}\", \"type\": \"completion\"}}\n\n"
+                    
+                    # 将消息放入私有队列
+                    if message_id not in sent_message_ids:
+                        sent_message_ids.add(message_id)
+                        # 将原始消息和消息ID一起放入队列
+                        await private_queue.put((message, message_id))
+                    
+                except asyncio.TimeoutError:
+                    # 超时，没有新消息
+                    pass
+                    
+                # 从私有队列获取一条消息并发送
+                if not private_queue.empty():
+                    message, msg_id = private_queue.get_nowait()
+                    if message:
+                        # 将内部消息格式转换为前端期望的格式
+                        try:
+                            if isinstance(message, dict):
+                                content = message.get("content", "")
+                                formatted_message = {
+                                    "id": msg_id,
+                                    "type": "log",
+                                    "message": content
+                                }
                                 
+                                # 如果是文件更新消息，转换为file类型
+                                if "file" in message and message.get("file"):
+                                    formatted_message["type"] = "file"
+                                    formatted_message["filename"] = message.get("file")
+                                
+                                message_json = json.dumps(formatted_message)
+                                print(f"连接 {connection_id} 发送消息: {str(formatted_message)[:50]}...")
+                                yield f"data: {message_json}\n\n"
+                            else:
+                                # 简单字符串消息
+                                formatted_message = {
+                                    "id": msg_id,
+                                    "type": "log",
+                                    "message": str(message)
+                                }
+                                message_json = json.dumps(formatted_message)
+                                yield f"data: {message_json}\n\n"
+                        except Exception as json_err:
+                            print(f"JSON序列化错误: {str(json_err)}, 消息: {str(message)[:100]}")
                 else:
-                    # 保持连接活跃
+                    # 队列为空，短暂等待
                     await asyncio.sleep(0.1)
                     
-                    # 定期清理长时间未使用的消息ID，避免内存泄漏
-                    if len(sent_message_ids) > 1000:
-                        sent_message_ids.clear()
-                    
-            except Exception as e:
-                print(f"事件流错误: {str(e)}")
-                await asyncio.sleep(0.1)
-                
-    except asyncio.CancelledError:
-        # 正常关闭
-        print("事件流已关闭")
-        raise
+            except Exception as queue_err:
+                print(f"队列操作错误: {str(queue_err)}")
+                await asyncio.sleep(0.5)
+            
+        except Exception as e:
+            print(f"生成事件错误: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # 发生错误后短暂等待
+            await asyncio.sleep(1)
+    
+    print(f"SSE连接 {connection_id} 已结束")
 
 # 如果前端构建目录存在，则挂载静态文件
 frontend_dist = FRONTEND_DIR / "dist"
@@ -243,136 +320,45 @@ FRONTEND_DIR.mkdir(exist_ok=True, parents=True)
 if not INDEX_HTML_PATH.exists():
     # 创建一个简单的index.html
     with open(INDEX_HTML_PATH, "w", encoding="utf-8") as f:
-        f.write("""<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenManus AI助手</title>
-    <style>
-        body { 
-            font-family: sans-serif; 
-            max-width: 1200px; 
-            margin: 0 auto; 
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        .app-container {
-            display: flex;
-            flex: 1;
-        }
-        .input-panel {
-            width: 30%;
-            padding: 20px;
-            border-right: 1px solid #eee;
-        }
-        .log-panel {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-        }
-        textarea {
-            width: 100%;
-            min-height: 100px;
-            padding: 10px;
-            margin-bottom: 10px;
-        }
-        button {
-            padding: 10px 20px;
-            background: #2c3e50;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        #logs {
-            white-space: pre-wrap;
-            font-family: monospace;
-            background: #f5f5f5;
-            padding: 10px;
-            border-radius: 5px;
-            min-height: 300px;
-        }
-    </style>
-</head>
-<body>
-    <h1>OpenManus AI助手</h1>
-    <div class="app-container">
-        <div class="input-panel">
-            <h2>命令输入</h2>
-            <textarea id="prompt" placeholder="输入您的指令..."></textarea>
-            <button id="send">发送</button>
-        </div>
-        <div class="log-panel">
-            <h2>系统日志</h2>
-            <div id="logs"></div>
-        </div>
-    </div>
-    
-    <script>
-        // 建立SSE连接
-        const eventSource = new EventSource('/api/logs');
-        const logs = document.getElementById('logs');
-        
-        eventSource.addEventListener('connect', (event) => {
-            console.log('连接已建立');
-            logs.innerHTML += '已连接到OpenManus系统\\n';
-        });
-        
-        eventSource.addEventListener('log', (event) => {
-            const data = JSON.parse(event.data);
-            if (data.content) {
-                logs.innerHTML += data.content + '\\n';
-                logs.scrollTop = logs.scrollHeight;
-            }
-        });
-        
-        eventSource.onerror = () => {
-            console.error('SSE连接错误');
-            logs.innerHTML += '连接已断开，尝试重新连接...\\n';
-        };
-        
-        // 发送命令
-        const promptInput = document.getElementById('prompt');
-        const sendButton = document.getElementById('send');
-        
-        sendButton.addEventListener('click', async () => {
-            const content = promptInput.value.trim();
-            if (!content) return;
-            
-            logs.innerHTML += `用户: ${content}\\n`;
-            
-            try {
-                const response = await fetch('/api/prompt', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ prompt: content })
-                });
-                
-                if (!response.ok) {
-                    throw new Error('请求失败');
-                }
-                
-                promptInput.value = '';
-            } catch (error) {
-                console.error('发送消息失败:', error);
-                logs.innerHTML += `发送消息失败: ${error.message}\\n`;
-            }
-        });
-        
-        // 按Enter发送消息
-        promptInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendButton.click();
-            }
-        });
-    </script>
-</body>
-</html>""")
+        f.write('<!DOCTYPE html>\n')
+        f.write('<html lang="zh-CN">\n')
+        f.write('<head>\n')
+        f.write('    <meta charset="UTF-8">\n')
+        f.write('    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n')
+        f.write('    <title>OpenManus - 智能AI代码生成器</title>\n')
+        f.write('    <link rel="stylesheet" href="/static/css/styles.css">\n')
+        f.write('</head>\n')
+        f.write('<body>\n')
+        f.write('    <header class="header">\n')
+        f.write('        <h1>OpenManus</h1>\n')
+        f.write('    </header>\n')
+        f.write('    <div class="main-container">\n')
+        f.write('        <div class="input-panel">\n')
+        f.write('            <h2 class="panel-header">任务设置</h2>\n')
+        f.write('            <div class="input-container">\n')
+        f.write('                <textarea id="prompt" placeholder="请输入您想要完成的任务描述..."></textarea>\n')
+        f.write('                <button id="submit">执行任务</button>\n')
+        f.write('                <div id="processing-indicator" class="processing-indicator">处理中，请稍候...</div>\n')
+        f.write('            </div>\n')
+        f.write('        </div>\n')
+        f.write('        <div class="log-panel">\n')
+        f.write('            <div class="tab-container">\n')
+        f.write('                <div class="tab active" data-target="logs-tab">执行日志</div>\n')
+        f.write('                <div class="tab" data-target="files-tab">生成文件</div>\n')
+        f.write('            </div>\n')
+        f.write('            <div id="logs-tab" class="tab-content active">\n')
+        f.write('                <div id="logs" class="logs-container"></div>\n')
+        f.write('            </div>\n')
+        f.write('            <div id="files-tab" class="tab-content">\n')
+        f.write('                <div id="files" class="files-container">\n')
+        f.write('                    <div id="no-files-message" class="no-files-message">暂无生成文件</div>\n')
+        f.write('                </div>\n')
+        f.write('            </div>\n')
+        f.write('        </div>\n')
+        f.write('    </div>\n')
+        f.write('    <script src="/static/js/main.js"></script>\n')
+        f.write('</body>\n')
+        f.write('</html>\n')
 
 @app.get("/api/logs")
 async def stream_logs():
@@ -444,90 +430,138 @@ async def handle_prompt(prompt_data: dict):
         # 返回错误信息
         return {"status": "error", "message": error_msg}
 
-def identify_generated_files(prompt):
-    """从日志中识别生成的文件"""
-    global generated_files, current_task_logs
+async def identify_generated_files(logs_text, prompt=""):
+    """使用AI识别生成的文件
+    
+    该函数会同时使用AI模型和正则表达式识别日志中提到的生成文件，
+    并返回两种方法识别结果的并集，以提高识别的覆盖率。
+    
+    Args:
+        logs_text: 纯净的日志文本内容
+        prompt: 用户提示，提供上下文（可选）
+    """
+    all_files = set()  # 使用集合存储所有识别到的文件，自动去重
+    
+    try:
+        print(f"[文件识别] 开始识别生成的文件，日志长度: {len(logs_text)}")
+        
+        # 尝试使用AI识别文件
+        ai_files = []
+        try:
+            print("[文件识别] 正在导入AI文件识别器...")
+            
+            # 导入AI文件识别器
+            from ai_file_identifier import AIFileIdentifier
+            print("[文件识别] AI文件识别器导入成功")
+            
+            try:
+                print("[文件识别] 创建识别器实例...")
+                identifier = AIFileIdentifier()
+                
+                print(f"[文件识别] 开始分析日志，长度：{len(logs_text)}")
+                # 使用当前事件循环执行AI识别
+                ai_files = await identifier.identify_files(prompt=prompt, logs=logs_text)
+                
+                print(f"[文件识别] AI识别到 {len(ai_files)} 个文件")
+                
+                # 添加AI识别的文件
+                for file in ai_files:
+                    if os.path.exists(file):
+                        all_files.add(file)
+            except Exception as e:
+                print(f"[文件识别] AI识别过程出错: {str(e)}")
+                import traceback
+                traceback.print_exc()
+        except ImportError:
+            print("[文件识别] AI文件识别器不可用")
+            
+        # 使用正则表达式方法识别文件
+        print("[文件识别] 使用正则表达式识别文件")
+        regex_files = _regex_identify_files(logs_text)
+        
+        # 添加正则表达式识别的文件
+        for file in regex_files:
+            if os.path.exists(file):
+                all_files.add(file)
+        
+        # 转换集合为列表
+        identified_files = list(all_files)
+        print(f"[文件识别] 总共识别到 {len(identified_files)} 个文件")
+        return identified_files
+    
+    except Exception as e:
+        print(f"[文件识别] 出错: {str(e)}")
+        traceback.print_exc()
+        return []
+
+def _regex_identify_files(logs_text):
+    """使用正则表达式从日志中识别文件
+    
+    Args:
+        logs_text: 纯净的日志文本内容
+        
+    Returns:
+        生成的文件列表
+    """
+    print("使用正则表达式方法识别文件")
     generated_files = []
     
-    # 记录日志
-    print(f"开始识别生成的文件，日志行数: {len(current_task_logs)}")
-    
-    # 将日志合并为一个字符串
-    logs_text = "\n".join(current_task_logs)
-    
-    # 用于匹配文件路径的正则表达式模式
+    # 文件识别正则表达式
     file_patterns = [
-        # 匹配常见的文件创建相关提示
-        r'(?:创建|保存|生成|写入)(?:了|到)?(?:文件|文档|图表|报表|图片|数据)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
-        # 匹配输出到文件的模式
-        r'输出(?:结果|内容|数据)?\s*(?:到|至|存储在)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
-        # 匹配保存文件的模式
-        r'(?:保存|存储)(?:到|在|至)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
-        # 匹配文件已创建/生成/保存的提示
-        r'文件\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?\s*(?:已|成功)?(?:创建|生成|保存)',
-        # 匹配文件名后跟随的路径模式
-        r'文件名(?:为|是|:)?\s*[\'"]?([\w\-./\\]+\.\w+)[\'"]?',
-        # 简单的文件路径匹配
-        r'[\'"]?((?:\.?/|\.\\|(?:[a-zA-Z]:\\))?[\w\-./\\]+\.(?:txt|csv|xlsx?|docx?|pptx?|pdf|json|xml|html?|css|js|py|java|cpp|c|h|md|log|ini|conf|cfg|ya?ml|sql|db|sqlite|zip|rar|gz|tar|bz2|7z|png|jpe?g|gif|bmp|svg|mp[34]|wav|avi|mp4|mov|flv|wmv))[\'"]?'
+        r'(?:saved|created|generated|written)(?:\s*to)?\s*(?:file)?\s*[:]?\s*(?:as|to)?[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?',
+        r'file\s*(?:saved|created|generated)\s*[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?',
+        r'generated file\s*[:]?\s*[\'"]?(?P<filepath>[\w\-./\\]+\.\w+)[\'"]?'
     ]
     
-    # 用于存储找到的文件路径
-    file_paths = set()
-    
-    # 使用正则表达式从日志中提取文件路径
+    # 使用每个正则表达式模式搜索
+    import re
     for pattern in file_patterns:
         matches = re.finditer(pattern, logs_text)
         for match in matches:
-            file_path = match.group(1).strip('"\'')
-            if file_path and os.path.isfile(file_path):
-                file_paths.add(file_path)
+            try:
+                file_path = match.group("filepath").strip().strip('"\'')
+                # 验证文件是否存在
+                if os.path.exists(file_path):
+                    # 避免重复添加
+                    if file_path not in generated_files:
+                        # 排除一些系统文件和临时文件
+                        if not (file_path.startswith(".") or 
+                               file_path.endswith(".pyc") or 
+                               "__pycache__" in file_path or
+                               "FETCH_HEAD" in file_path):
+                            generated_files.append(file_path)
+                            print(f"找到生成的文件: {file_path}")
+            except Exception as e:
+                print(f"处理文件路径失败: {file_path if 'file_path' in locals() else 'unknown'}, 错误: {str(e)}")
     
-    # 如果没有找到文件，尝试在项目目录下查找最近修改的文件
-    if not file_paths:
-        print("未从日志中找到文件，尝试查找最近修改的文件")
-        current_time = time.time()
-        # 查找项目目录下最近1分钟内创建或修改的文件
-        for root, _, files in os.walk("."):
-            for file in files:
-                file_path = os.path.join(root, file)
-                try:
-                    file_stat = os.stat(file_path)
-                    # 检查文件是否在最近1分钟内创建或修改
-                    if (current_time - file_stat.st_mtime < 60 or 
-                        current_time - file_stat.st_ctime < 60):
-                        # 排除日志和临时文件
-                        if not (file.endswith('.log') or file.startswith('.') or 
-                                'cache' in file_path.lower() or 'temp' in file_path.lower()):
-                            file_paths.add(file_path)
-                except Exception as e:
-                    print(f"获取文件信息失败: {file_path}, 错误: {str(e)}")
-    
-    # 将找到的文件路径添加到生成的文件列表中
-    for file_path in file_paths:
-        try:
-            # 获取文件的相对路径
-            rel_path = os.path.relpath(file_path)
-            generated_files.append(rel_path)
-            print(f"找到生成的文件: {rel_path}")
-        except Exception as e:
-            print(f"处理文件路径失败: {file_path}, 错误: {str(e)}")
-    
-    print(f"找到 {len(generated_files)} 个生成的文件")
+    print(f"正则表达式识别到 {len(generated_files)} 个文件")
     return generated_files
 
 # 为AI生成任务总结
 async def generate_task_summary(prompt, logs):
-    """使用OpenAI API生成任务执行结果的摘要"""
-    global summary_generation_status, last_task_summary, client
+    """使用OpenAI API生成任务执行结果的摘要
+    
+    当日志内容过多时，采用分段摘要再合并的策略：
+    1. 将日志分成多个段落
+    2. 为每个段落生成摘要
+    3. 将所有段落摘要合并，再生成最终摘要
+    4. 所有步骤均采用流式响应，避免超时
+    
+    参数:
+        prompt (str): 用户提示词
+        logs (list): 日志内容列表
+        
+    返回:
+        str: 生成的摘要
+    """
+    global summary_generation_status, last_task_summary, client, message_queue
     
     try:
-        # 更新摘要生成状态
         summary_generation_status = {
             "in_progress": True,
             "message": "正在生成任务摘要..."
         }
         
-        # 如果没有配置API密钥，则返回提示信息
         if not openai_api_key:
             last_task_summary = "无法生成详细摘要：未配置OpenAI API密钥。请在config/config.toml中配置。"
             summary_generation_status = {
@@ -536,227 +570,353 @@ async def generate_task_summary(prompt, logs):
             }
             return last_task_summary
             
+        # 日志文本总长度
         logs_text = "\n".join(logs)
-        print(f"开始为任务生成摘要，日志长度：{len(logs_text)}")
+        total_length = len(logs_text)
+        print(f"开始为任务生成摘要，原始日志长度：{total_length}")
         
-        # 构建提示信息
-        messages = [
-            {"role": "system", "content": "你是一个任务执行分析专家，需要分析执行日志并提供简洁的总结。"},
-            {"role": "user", "content": f"""请分析以下任务执行日志，并简洁地总结以下内容：
-1. 任务的主要目标是什么
-2. 任务是否成功完成
-3. 生成了哪些文件及其主要内容和用途
-4. 有没有遇到明显的错误或问题
-
-请用中文回答，简明扼要，不超过300字。
-
-任务提示: {prompt}
-
-执行日志:
-{logs_text[:50000]}  # 限制日志长度，防止超出token限制
-"""}
-        ]
+        # 分段大小，以字符为单位
+        segment_size = 20000  # 每段最多20000个字符
         
-        # 重试机制
-        max_retries = 3
-        retry_count = 0
+        # 如果日志过长，需要分段处理
+        need_segmentation = total_length > segment_size
         
-        while retry_count < max_retries:
-            try:
-                print(f"正在调用OpenAI API (重试 {retry_count}/{max_retries})...")
-                
-                # 尝试使用不同的方法调用API
-                if client:
-                    # 方法1: 使用新版客户端，非流式
-                    try:
-                        print("使用新版客户端API...")
-                        response = await asyncio.to_thread(
-                            lambda: client.chat.completions.create(
-                                model=openai_model,
-                                messages=messages,
-                                temperature=0.2,
-                                max_tokens=500
-                            )
-                        )
-                        
-                        if response.choices and len(response.choices) > 0:
-                            last_task_summary = response.choices[0].message.content
-                            print("成功生成任务摘要")
-                            break
-                    except Exception as e1:
-                        print(f"新版客户端API调用失败: {str(e1)}")
-                        
-                        # 方法2: 使用新版客户端，流式请求
-                        try:
-                            print("尝试使用流式请求...")
-                            stream_response = await asyncio.to_thread(
-                                lambda: client.chat.completions.create(
-                                    model=openai_model,
-                                    messages=messages,
-                                    temperature=0.2,
-                                    max_tokens=500,
-                                    stream=True
-                                )
-                            )
-                            
-                            # 处理流式响应
-                            full_response = ""
-                            for chunk in stream_response:
-                                if hasattr(chunk.choices[0], 'delta') and hasattr(chunk.choices[0].delta, 'content'):
-                                    content = chunk.choices[0].delta.content
-                                    if content:
-                                        full_response += content
-                            
-                            if full_response:
-                                last_task_summary = full_response
-                                print("成功生成任务摘要(流式)")
-                                break
-                        except Exception as e2:
-                            print(f"流式请求失败: {str(e2)}")
-                
-                # 方法3: 使用旧版API接口（兼容模式）
-                try:
-                    print("尝试使用兼容模式...")
-                    if not 'api_base' in dir(openai) and openai_base_url:
-                        openai.api_base = openai_base_url
-                    
-                    response = await asyncio.to_thread(
-                        lambda: openai.ChatCompletion.create(
-                            model=openai_model,
-                            messages=messages,
-                            temperature=0.2,
-                            max_tokens=500
-                        )
-                    )
-                    
-                    if response.choices and len(response.choices) > 0:
-                        last_task_summary = response.choices[0].message.content
-                        print("成功生成任务摘要(兼容模式)")
-                        break
-                except Exception as e3:
-                    print(f"兼容模式失败: {str(e3)}")
-                
-                # 方法4：使用直接HTTP请求（最后的尝试）
-                try:
-                    import httpx
-                    print("尝试使用直接HTTP请求...")
-                    
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {openai_api_key}"
-                    }
-                    
-                    url = f"{openai_base_url if openai_base_url else 'https://api.openai.com'}/v1/chat/completions"
-                    
-                    payload = {
-                        "model": openai_model,
-                        "messages": messages,
-                        "temperature": 0.2,
-                        "max_tokens": 500
-                    }
-                    
-                    async with httpx.AsyncClient() as http_client:
-                        response = await http_client.post(
-                            url,
-                            headers=headers,
-                            json=payload,
-                            timeout=30.0
-                        )
-                        
-                        if response.status_code == 200:
-                            result = response.json()
-                            if "choices" in result and len(result["choices"]) > 0:
-                                last_task_summary = result["choices"][0]["message"]["content"]
-                                print("成功生成任务摘要(HTTP请求)")
-                                break
-                        else:
-                            print(f"HTTP请求失败: {response.status_code} {response.text}")
-                except Exception as e4:
-                    print(f"HTTP请求出错: {str(e4)}")
-                
-                # 如果所有方法都失败，增加重试计数
-                retry_count += 1
-                await asyncio.sleep(2)  # 等待2秒后重试
-                
-            except Exception as e:
-                error_message = f"重试 {retry_count+1}/{max_retries} 失败: {str(e)}"
-                print(error_message)
-                retry_count += 1
-                await asyncio.sleep(2)  # 出错后等待2秒
+        # 通知前端开始生成摘要
+        message_queue.put_nowait("开始生成摘要...")
         
-        # 如果所有重试都失败
-        if retry_count >= max_retries and not last_task_summary:
-            last_task_summary = "无法生成详细摘要：连接API服务器失败，请检查网络或API配置。"
-            print("所有重试尝试均失败")
+        if need_segmentation:
+            print(f"日志过长，将分段处理，共 {(total_length + segment_size - 1) // segment_size} 段")
+            message_queue.put_nowait(f"日志较长（{total_length}字符），正在分段分析...")
             
+            # 分段处理
+            segments = []
+            for i in range(0, total_length, segment_size):
+                segments.append(logs_text[i:i + segment_size])
+            
+            # 为每段生成摘要
+            segment_summaries = []
+            for i, segment in enumerate(segments):
+                message_queue.put_nowait(f"正在分析第 {i+1}/{len(segments)} 段日志...")
+                print(f"生成第 {i+1}/{len(segments)} 段摘要，长度：{len(segment)}")
+                
+                segment_summary = await _generate_segment_summary(
+                    segment, 
+                    prompt, 
+                    f"第 {i+1}/{len(segments)} 段",
+                    i == 0  # 是否是第一段
+                )
+                
+                if segment_summary:
+                    segment_summaries.append(segment_summary)
+                    message_queue.put_nowait(f"第 {i+1} 段分析完成")
+                else:
+                    message_queue.put_nowait(f"第 {i+1} 段分析失败")
+            
+            # 如果有多段摘要，合并生成最终摘要
+            if len(segment_summaries) > 1:
+                message_queue.put_nowait("正在整合所有段落的分析结果...")
+                print("生成最终摘要，整合所有段落分析")
+                
+                final_summary = await _generate_final_summary(segment_summaries, prompt)
+                
+                if final_summary:
+                    last_task_summary = final_summary
+                    message_queue.put_nowait("摘要生成完成")
+                    print("成功生成最终任务摘要")
+                else:
+                    # 如果最终摘要生成失败，使用所有段落摘要的拼接
+                    joined_summary = "\n\n".join([
+                        f"【第 {i+1}/{len(segment_summaries)} 段分析】\n{summary}" 
+                        for i, summary in enumerate(segment_summaries)
+                    ])
+                    last_task_summary = joined_summary
+                    message_queue.put_nowait("摘要整合过程中出现问题，已提供各段分析结果")
+                    print("最终摘要生成失败，使用分段摘要拼接")
+            elif len(segment_summaries) == 1:
+                # 只有一段摘要
+                last_task_summary = segment_summaries[0]
+                print("只有一段摘要，直接使用")
+            else:
+                # 没有摘要
+                error_msg = "所有段落分析均失败，无法生成摘要"
+                last_task_summary = error_msg
+                message_queue.put_nowait(error_msg)
+                print(error_msg)
+        else:
+            # 日志不需要分段处理，直接生成摘要
+            print("日志长度适中，直接生成摘要")
+            summary = await _generate_segment_summary(logs_text, prompt, "完整", True)
+            
+            if summary:
+                last_task_summary = summary
+                message_queue.put_nowait("摘要生成完成")
+                print("成功生成任务摘要")
+            else:
+                error_msg = "摘要生成失败"
+                last_task_summary = error_msg
+                message_queue.put_nowait(error_msg)
+                print(error_msg)
+        
     except Exception as e:
-        print(f"生成任务摘要时出错: {str(e)}")
+        error_msg = f"生成摘要时出错: {str(e)}"
+        print(error_msg)
         import traceback
-        print(traceback.format_exc())
-        last_task_summary = f"生成摘要时出错: {str(e)}"
+        traceback.print_exc()
+        last_task_summary = error_msg
+        message_queue.put_nowait(error_msg)
+        
     finally:
-        # 更新摘要生成状态
         summary_generation_status = {
             "in_progress": False,
             "message": ""
         }
         return last_task_summary
 
+async def _generate_segment_summary(segment_text, prompt, segment_label, is_first_segment):
+    """为单个日志段落生成摘要"""
+    max_retries = 3
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"尝试生成{segment_label}摘要 (尝试 {attempt}/{max_retries})...")
+            
+            # 构建系统消息和用户消息
+            system_message = "你是一个任务执行分析专家，需要详细分析执行日志并提供全面的总结。你擅长识别关键流程、生成的文件以及可能的问题点，并提供有价值的见解。"
+            
+            # 根据不同段落构建不同的提示
+            if is_first_segment:
+                user_message = f"请分析以下任务执行日志{segment_label}，提供一个全面详细的总结分析。包含以下方面：主要目标、执行流程、成功标准、生成的文件、遇到的问题、改进建议等。请自由组织内容，提供有深度的分析：\n\n{segment_text}\n\n提示词：{prompt}"
+            else:
+                user_message = f"请继续分析以下任务执行日志{segment_label}，重点关注这部分日志中的新信息，避免与前面重复。请关注：执行过程中的变化、新生成的文件、遇到的问题等：\n\n{segment_text}\n\n提示词：{prompt}"
+            
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
+            
+            # 使用流式请求
+            stream_response = client.chat.completions.create(
+                model=openai_model,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=1000,
+                stream=True
+            )
+            
+            # 收集摘要内容
+            summary_content = ""
+            prefix = f"【{segment_label}分析】" if segment_label != "完整" else ""
+            
+            if prefix:
+                message_queue.put_nowait(prefix)
+                
+            async for content in _aiter_stream(stream_response):
+                summary_content += content
+                message_queue.put_nowait(content)
+            
+            if summary_content.strip():
+                if prefix:
+                    return f"{prefix}\n{summary_content}"
+                return summary_content
+            else:
+                raise Exception("生成的摘要内容为空")
+                
+        except Exception as e:
+            print(f"{segment_label}摘要尝试 {attempt} 失败: {str(e)}")
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(2)
+    
+    return None
+
+async def _generate_final_summary(segment_summaries, prompt):
+    """根据所有段落摘要生成最终摘要"""
+    max_retries = 3
+    
+    # 合并所有段落摘要
+    all_summaries = "\n\n".join(segment_summaries)
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"尝试生成最终整合摘要 (尝试 {attempt}/{max_retries})...")
+            
+            # 构建系统消息和用户消息
+            system_message = "你是一个信息整合专家，擅长将多段分析结果整合为一份连贯、全面且有洞察力的报告。请保留所有重要细节，但避免重复信息。"
+            
+            user_message = f"请将以下多段任务分析结果整合为一份完整、连贯的报告。你需要保留所有关键信息，但要避免重复。请确保最终报告结构清晰，包含：主要目标、执行过程、成功结果、生成的文件、遇到的问题和改进建议等内容。\n\n{all_summaries}\n\n原始任务提示词：{prompt}"
+            
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
+            
+            # 使用流式请求
+            stream_response = client.chat.completions.create(
+                model=openai_model,
+                messages=messages,
+                temperature=0.2,
+                max_tokens=1500,
+                stream=True
+            )
+            
+            # 发送分隔符
+            message_queue.put_nowait("\n\n【最终整合分析】\n")
+            
+            # 收集摘要内容
+            summary_content = ""
+            async for content in _aiter_stream(stream_response):
+                summary_content += content
+                message_queue.put_nowait(content)
+            
+            if summary_content.strip():
+                return f"【最终整合分析】\n{summary_content}"
+            else:
+                raise Exception("生成的最终摘要内容为空")
+                
+        except Exception as e:
+            print(f"最终摘要尝试 {attempt} 失败: {str(e)}")
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(2)
+    
+    return None
+
+async def _aiter_stream(stream):
+    """处理流式响应的辅助函数"""
+    try:
+        for chunk in stream:
+            if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        print(f"流式迭代出错: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        yield f"生成过程中发生错误: {str(e)}"
+
 # 添加异步处理提示的函数
 async def process_prompt_with_agent(agent, prompt):
-    """使用代理处理提示词"""
-    global current_task_logs, message_queue
+    """使用智能体处理用户提示词
     
-    # 记录开始时间
-    start_time = time.time()
+    Args:
+        agent: 智能体实例
+        prompt: 用户提示词
     
-    # 清空当前任务日志
+    Returns:
+        生成的文件列表
+    """
+    global generated_files, current_task_logs, pure_logs, logs_processor_callback
+    
+    # 重置任务状态
+    generated_files = []
     current_task_logs = []
+    pure_logs = []
+    
+    # 用于跟踪分段任务的状态
+    task_status = {
+        "current_logs_length": 0,
+        "segment_size": 20000,  # 每20000个字符触发一次处理
+        "segments": []
+    }
     
     try:
-        # 尝试运行代理
-        result = await agent.run(prompt)
+        # 记录输入的提示
+        print(f"执行任务: {prompt}")
         
-        # 处理结果
-        if result:
-            lines = result.split('\n')
-            for line in lines:
-                if line.strip():
-                    # 添加到日志
-                    log_interceptor(line)
+        # 添加日志拦截处理
+        def logs_processor(message):
+            # 清理日志内容
+            cleaned_log = message  # 日志已在log_interceptor中清理过
+            
+            # 添加到纯净日志
+            if cleaned_log:
+                pure_logs.append(cleaned_log)
+                
+                # 检查日志长度并触发处理
+                task_status["current_logs_length"] += len(cleaned_log)
+                if task_status["current_logs_length"] >= task_status["segment_size"]:
+                    # 获取当前日志内容
+                    current_segment = "\n".join(pure_logs)
+                    task_status["segments"].append(current_segment)
+                    
+                    # 启动文件识别任务
+                    print(f"触发文件识别: 日志长度达到 {task_status['current_logs_length']} 字符")
+                    asyncio.create_task(process_segment(current_segment, len(task_status["segments"])))
+                    
+                    # 重置当前累计长度
+                    task_status["current_logs_length"] = 0
+                    pure_logs.clear()  # 使用clear()而不是重新赋值
         
-        # 添加处理完成的消息
+        # 定义段处理函数
+        async def process_segment(segment_text, segment_num):
+            try:
+                print(f"开始处理第 {segment_num} 段日志，长度: {len(segment_text)} 字符")
+                
+                # 识别文件
+                segment_files = await identify_generated_files(segment_text, prompt=prompt)
+                if segment_files:
+                    print(f"第 {segment_num} 段识别到 {len(segment_files)} 个文件")
+                    for file in segment_files:
+                        if file not in generated_files:
+                            generated_files.append(file)
+                            print(f"添加新文件: {file}")
+                            
+                            # 发送文件通知给前端
+                            message_queue.put_nowait({
+                                "content": f"识别到新文件: {file}",
+                                "file": file
+                            })
+                else:
+                    print(f"第 {segment_num} 段未识别到文件")
+            except Exception as e:
+                print(f"处理第 {segment_num} 段时出错: {str(e)}")
+        
+        # 设置全局回调
+        logs_processor_callback = logs_processor
+        
+        # 执行智能体任务
+        await agent.run(prompt)
+        
+        # 处理剩余日志
+        if pure_logs and task_status["current_logs_length"] > 0:
+            current_segment = "\n".join(pure_logs)
+            print(f"处理剩余日志片段, 长度: {task_status['current_logs_length']} 字符")
+            await process_segment(current_segment, len(task_status["segments"]) + 1)
+        
+        # 识别所有文件
+        if current_task_logs:
+            all_logs = "\n".join(current_task_logs)
+            print(f"执行最终文件识别，总日志长度: {len(all_logs)} 字符")
+            final_files = await identify_generated_files(all_logs, prompt=prompt)
+            for file in final_files:
+                if file not in generated_files:
+                    generated_files.append(file)
+                    # 发送文件通知给前端
+                    message_queue.put_nowait({
+                        "content": f"识别到新文件: {file}",
+                        "file": file
+                    })
+        
+        # 清除回调
+        logs_processor_callback = None
+        
+        # 发送完成标记
         log_interceptor("处理完成")
         
-        # 识别生成的文件
-        identify_generated_files(prompt)
-        
-        # 将所有日志合并为一个文本
-        logs_text = "\n".join(current_task_logs)
-        
-        # 异步生成任务摘要
-        asyncio.create_task(generate_task_summary(prompt, logs_text))
-        
-        # 记录耗时
-        elapsed_time = time.time() - start_time
-        print(f"任务处理完成，耗时: {elapsed_time:.2f}秒")
-        
+        # 返回生成的文件列表
+        return {"files": generated_files}
     except Exception as e:
+        error_msg = f"处理任务时出错: {str(e)}"
+        print(error_msg)
         import traceback
-        error_message = f"处理过程中出错: {str(e)}"
-        print(error_message)
-        print(traceback.format_exc())
+        traceback.print_exc()
         
-        # 添加错误消息到日志
-        log_interceptor(error_message)
+        # 发送错误消息
+        log_interceptor(error_msg)
         
-        # 返回简化的错误消息给前端
+        # 即使出错也尝试发送完成标记
         log_interceptor("处理完成")
         
-        # 即使出错也尝试识别文件并生成摘要
-        identify_generated_files(prompt)
-        logs_text = "\n".join(current_task_logs)
-        asyncio.create_task(generate_task_summary(prompt, logs_text))
+        return {"error": error_msg}
 
 # 添加新的API端点
 @app.get("/api/files")
@@ -793,7 +953,7 @@ async def get_generated_files():
 
 @app.get("/api/download/{file_name}")
 async def download_file(file_name: str):
-    """下载指定的文件"""
+    """下载指定的文件（路径参数版本）"""
     # 查找匹配的文件
     # 兼容generated_files为字符串列表或字典列表的情况
     matching_files = []
@@ -820,6 +980,30 @@ async def download_file(file_name: str):
         media_type="application/octet-stream"
     )
 
+@app.get("/api/download")
+async def download_file_query(filename: str):
+    """下载指定的文件（查询参数版本）"""
+    # 查找匹配的文件
+    matching_files = []
+    for f in generated_files:
+        if isinstance(f, str):
+            if os.path.basename(f) == filename:
+                matching_files.append(f)
+        elif isinstance(f, dict) and f.get("name") == filename:
+            matching_files.append(f.get("path"))
+    
+    if not matching_files:
+        raise HTTPException(status_code=404, detail=f"文件未找到: {filename}")
+    
+    file_path = matching_files[0]
+    
+    # 返回文件
+    return FileResponse(
+        path=file_path, 
+        filename=filename,
+        media_type="application/octet-stream"
+    )
+
 @app.get("/api/history")
 async def get_history():
     """获取对话历史记录"""
@@ -829,90 +1013,38 @@ async def get_history():
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# 挂载前端静态资源
-frontend_assets = FRONTEND_DIR / "assets"
-if frontend_assets.exists():
-    app.mount("/assets", StaticFiles(directory=str(frontend_assets)), name="assets")
+@app.get("/api/run")
+async def run_task(prompt: str):
+    """处理用户输入的提示并返回事件流"""
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream"
+    }
+    
+    # 启动任务处理
+    asyncio.create_task(handle_prompt({"prompt": prompt}))
+    
+    return StreamingResponse(
+        event_generator(), 
+        media_type="text/event-stream",
+        headers=headers
+    )
 
 @app.get("/{full_path:path}")
 async def serve_frontend(request: Request, full_path: str):
-    """提供前端页面"""
-    # 如果是API请求，让其他路由处理
-    if full_path.startswith("api/"):
-        raise HTTPException(status_code=404, detail="Not Found")
+    """提供前端页面，作为默认路由返回静态index.html文件"""
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
     
-    # 如果index.html存在，返回它
-    if INDEX_HTML_PATH.exists():
-        return FileResponse(INDEX_HTML_PATH)
-    else:
-        # 如果前端尚未构建，返回一个简单的HTML页面
-        html_content = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>OpenManus AI助手</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                h1 { color: #333; }
-                .warning { color: #ff6600; }
-                .container { border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
-                textarea { width: 100%; height: 100px; margin: 10px 0; }
-                button { background: #4CAF50; color: white; padding: 10px 15px; border: none; cursor: pointer; }
-                #output { background: #f5f5f5; padding: 10px; height: 300px; overflow-y: auto; margin-top: 20px; white-space: pre-wrap; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>OpenManus AI助手</h1>
-                <p class="warning">前端尚未构建，使用基本界面</p>
-                <textarea id="promptInput" placeholder="请输入您的问题..."></textarea>
-                <button onclick="sendPrompt()">发送</button>
-                <div id="output"></div>
-            </div>
-            
-            <script>
-                const outputDiv = document.getElementById('output');
-                const promptInput = document.getElementById('promptInput');
-                
-                // 设置SSE连接
-                const evtSource = new EventSource('/api/logs');
-                evtSource.addEventListener('log', function(event) {
-                    const data = JSON.parse(event.data);
-                    outputDiv.innerHTML += data.content + '\\n';
-                    outputDiv.scrollTop = outputDiv.scrollHeight;
-                });
-                
-                // 发送提示
-                function sendPrompt() {
-                    const prompt = promptInput.value.trim();
-                    if (!prompt) return;
-                    
-                    fetch('/api/prompt', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ prompt: prompt }),
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        console.log('Success:', data);
-                        promptInput.value = '';
-                    })
-                    .catch((error) => {
-                        console.error('Error:', error);
-                    });
-                }
-                
-                // 监听回车键
-                promptInput.addEventListener('keypress', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendPrompt();
-                    }
-                });
-            </script>
-        </body>
-        </html>
-        """
-        return HTMLResponse(content=html_content) 
+    if full_path.strip() == "" or full_path == "index.html":
+        # 使用静态HTML文件
+        if INDEX_HTML_PATH.exists():
+            return FileResponse(INDEX_HTML_PATH, headers=headers)
+        else:
+            return Response(content=f"前端文件不存在: {INDEX_HTML_PATH}", status_code=404)
+    
+    return Response(status_code=404) 

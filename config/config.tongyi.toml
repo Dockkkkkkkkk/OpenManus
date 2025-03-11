@@ -1,0 +1,19 @@
+# Global LLM configuration
+[llm]
+model = "qwq-32b-preview"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key = "sk-57e3301689644bf6a6f0ab23780176db"
+max_tokens = 4096
+temperature = 0.0
+
+# Optional configuration for specific LLM models
+[llm.vision]
+model = "qwen-omni-turbo-2025-01-19"
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+api_key = "sk-57e3301689644bf6a6f0ab23780176db"
+
+# OpenAI configuration
+[openai]
+model = "qwq-32b-preview"
+api_key = "sk-57e3301689644bf6a6f0ab23780176db"
+api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"

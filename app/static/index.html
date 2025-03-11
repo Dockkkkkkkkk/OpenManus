@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>OpenManus - 智能AI代码生成器</title>
+    <!-- 外部CSS文件引用 -->
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <style id="override-styles">
+        /* 直接在body中添加样式覆盖，确保最高优先级 */
+        .log-entry, 
+        .log-entry::before,
+        .log-entry * {
+            background-color: white !important;
+            border-left: none !important;
+            border-left-width: 0 !important;
+            border-left-color: transparent !important;
+        }
+        .log-entry::before {
+            content: none !important;
+            display: none !important;
+        }
+        /* 移除所有绿色边框 */
+        * {
+            border-left-color: transparent !important;
+        }
+    </style>
+    <header class="header">
+        <h1>OpenManus</h1>
+    </header>
+
+    <div class="main-container">
+        <!-- 输入面板 -->
+        <div class="input-panel">
+            <h2 class="panel-header">任务设置</h2>
+            <div class="input-container">
+                <textarea id="prompt" placeholder="请输入您想要完成的任务描述..."></textarea>
+                <button id="submit">执行任务</button>
+                <div id="processing-indicator" class="processing-indicator">处理中，请稍候...</div>
+            </div>
+        </div>
+
+        <!-- 日志/文件面板 -->
+        <div class="log-panel">
+            <div class="tab-container">
+                <div class="tab active" data-target="logs-tab">执行日志</div>
+                <div class="tab" data-target="files-tab">生成文件</div>
+            </div>
+            
+            <!-- 日志内容 -->
+            <div id="logs-tab" class="tab-content active">
+                <div id="logs" class="logs-container"></div>
+            </div>
+            
+            <!-- 文件内容 -->
+            <div id="files-tab" class="tab-content">
+                <div id="files" class="files-container">
+                    <div id="no-files-message" class="no-files-message">暂无生成文件</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 外部JS文件引用 -->
+    <script src="/static/js/main.js"></script>
+</body>
+</html> 

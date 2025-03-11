@@ -11,3 +11,9 @@ temperature = 0.0
 model = "gpt-4o"
 base_url = "https://api.gptsapi.net/v1"
 api_key = "sk-cse13a3c331f3c6e74210ba91ffc7a165dce002b493YTZ2v"
+
+# OpenAI configuration
+[openai]
+model = "gpt-4o"
+api_key = "sk-cse13a3c331f3c6e74210ba91ffc7a165dce002b493YTZ2v"
+api_base = "https://api.gptsapi.net/v1"
