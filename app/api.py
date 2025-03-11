@@ -45,11 +45,44 @@ def log_interceptor(message):
     """将日志消息添加到队列中"""
     try:
         print(f"日志拦截器接收到消息: {message}")
-        message_queue.put(message)
+        
+        # 处理日志消息，去除前缀
+        processed_message = message
+        if message and isinstance(message, str):
+            # 检查是否包含常见的日志前缀模式
+            if " | " in message:
+                # 尝试去除时间戳和日志级别前缀，例如：2025-03-11 16:58:22.527 | INFO     | app.agent.toolcall:think:54 - 
+                parts = message.split(" | ")
+                if len(parts) >= 3 and " - " in parts[2]:
+                    # 提取实际内容
+                    content_parts = parts[2].split(" - ", 1)
+                    if len(content_parts) > 1:
+                        processed_message = content_parts[1].strip()
+                # 处理简单的两部分格式：INFO | 内容
+                elif len(parts) == 2:
+                    processed_message = parts[1].strip()
+            # 如果是INFO、WARNING等简单前缀，也去除
+            elif any(message.startswith(prefix) for prefix in ["INFO | ", "WARNING | ", "ERROR | ", "INFO: ", "WARNING: ", "ERROR: "]):
+                for prefix in ["INFO | ", "WARNING | ", "ERROR | ", "INFO: ", "WARNING: ", "ERROR: "]:
+                    if message.startswith(prefix):
+                        processed_message = message[len(prefix):].strip()
+                        break
+            
+            # 处理带冒号的情况：INFO： 或 WARNING： 等
+            elif "INFO：" in message or "WARNING：" in message or "ERROR：" in message:
+                if "INFO：" in message:
+                    processed_message = message.split("INFO：", 1)[1].strip()
+                elif "WARNING：" in message:
+                    processed_message = message.split("WARNING：", 1)[1].strip()
+                elif "ERROR：" in message:
+                    processed_message = message.split("ERROR：", 1)[1].strip()
+        
+        # 将处理后的消息放入队列
+        message_queue.put(processed_message)
         
         # 保存到对话历史
-        if message and isinstance(message, str):
-            conversation_history.append({"role": "system", "content": message})
+        if processed_message and isinstance(processed_message, str):
+            conversation_history.append({"role": "system", "content": processed_message})
             # 限制历史记录长度
             if len(conversation_history) > 100:
                 conversation_history.pop(0)
@@ -66,29 +99,35 @@ async def event_generator():
         welcome_msg = "OpenManus系统已启动，等待您的指令..."
         yield f"event: log\ndata: {json.dumps({'content': welcome_msg})}\n\n"
         
-        # 发送历史记录
-        if conversation_history:
-            history_msg = "加载历史记录...\n" + "\n".join([m["content"] for m in conversation_history[-10:] if m["role"] == "system"])
-            yield f"event: log\ndata: {json.dumps({'content': history_msg})}\n\n"
+        # 注意：移除历史记录的发送，避免重复显示日志
+        # 只处理实时产生的新日志
+        
+        # 创建一个已发送消息的集合，避免重复发送
+        sent_messages = set()
         
         while True:
             try:
                 if not message_queue.empty():
                     message = message_queue.get()
-                    # 将消息格式化为SSE格式
+                    
+                    # 如果消息是处理完成的标志，清空sent_messages集合
+                    if message == "处理完成":
+                        sent_messages = set()
+                    
+                    # 将消息格式化为SSE格式并发送
                     yield f"event: log\ndata: {json.dumps({'content': message})}\n\n"
                 else:
                     # 保持连接活跃
                     yield ":\n\n"
-                await asyncio.sleep(0.1)  # 减少睡眠时间，提高响应速度
+                
+                # 短暂等待以减轻服务器负载
+                await asyncio.sleep(0.1)
             except Exception as e:
-                # 如果出错，发送错误消息并继续
-                error_msg = f"错误: {str(e)}"
-                print(error_msg)
-                yield f"event: log\ndata: {json.dumps({'content': error_msg})}\n\n"
-                await asyncio.sleep(1)
-    except asyncio.CancelledError:
-        print("SSE连接已关闭")
+                print(f"生成事件时出错: {str(e)}")
+                break
+    except Exception as e:
+        print(f"事件生成器错误: {str(e)}")
+        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
 # 如果前端构建目录存在，则挂载静态文件
 frontend_dist = FRONTEND_DIR / "dist"

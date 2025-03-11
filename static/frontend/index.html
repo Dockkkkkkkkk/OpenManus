@@ -82,6 +82,8 @@
             margin-bottom: 10px;
             padding: 8px 12px;
             border-radius: 5px;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
         }
         .user {
             background-color: #e6f7ff;
@@ -117,6 +119,23 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        /* 基本文本样式 */
+        .formatted-text pre {
+            background-color: #f6f8fa;
+            border-radius: 3px;
+            padding: 16px;
+            overflow: auto;
+            font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 85%;
+            line-height: 1.45;
+        }
+        .formatted-text code {
+            background-color: rgba(27,31,35,0.05);
+            border-radius: 3px;
+            font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 85%;
+            padding: 0.2em 0.4em;
+        }
     </style>
 </head>
 <body>
@@ -140,6 +159,22 @@
         const sendButton = document.getElementById('send');
         const logs = document.getElementById('logs');
         const statusDiv = document.getElementById('status');
+        
+        // 简单的文本格式化，只处理简单的代码块
+        function formatText(text) {
+            if (!text) return '';
+            
+            // 替换连续的空格为保留格式的空格
+            text = text.replace(/ {2}/g, ' &nbsp;');
+            
+            // 处理代码块，不使用任何复杂的Markdown解析
+            text = text.replace(/```([\s\S]*?)```/g, '<pre>$1</pre>');
+            
+            // 处理内联代码
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            return text;
+        }
         
         // 状态变量
         let isProcessing = false;
@@ -177,24 +212,43 @@
                     updateStatus(false, '任务已完成');
                     setTimeout(() => updateStatus(false, ''), 3000);
                 } else {
-                    addMessage(data.content, 'system');
+                    // 使用简单格式化
+                    addFormattedMessage(data.content, 'system');
                 }
             }
         });
         
-        eventSource.onerror = () => {
-            console.error('SSE连接错误');
+        eventSource.addEventListener('error', (event) => {
+            console.error('SSE连接错误', event);
             addMessage('连接已断开，尝试重新连接...', 'error');
             // 尝试重新连接
             setTimeout(() => {
                 location.reload();
             }, 5000);
-        };
+        });
         
+        // 添加普通文本消息
         function addMessage(content, type) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${type}`;
             messageDiv.textContent = content;
+            logs.appendChild(messageDiv);
+            logs.scrollTop = logs.scrollHeight;
+        }
+        
+        // 添加带格式的消息（简单格式化，不使用Markdown）
+        function addFormattedMessage(content, type) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type} formatted-text`;
+            
+            try {
+                const formatted = formatText(content);
+                messageDiv.innerHTML = formatted;
+            } catch (e) {
+                console.error('格式化文本失败:', e);
+                messageDiv.textContent = content;
+            }
+            
             logs.appendChild(messageDiv);
             logs.scrollTop = logs.scrollHeight;
         }
