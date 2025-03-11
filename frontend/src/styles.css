@@ -1,0 +1,229 @@
+/* 全局样式 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+  background-color: #f5f5f5;
+  color: #333;
+  line-height: 1.6;
+}
+
+/* 应用容器 */
+.app-container {
+  max-width: 100%;
+  min-height: 100vh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 应用头部 */
+.app-header {
+  background-color: #2c3e50;
+  color: white;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.app-header h1 {
+  font-size: 1.5rem;
+  font-weight: 500;
+}
+
+/* 连接状态指示器 */
+.connection-status {
+  padding: 0.3rem 0.8rem;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.connected {
+  background-color: #27ae60;
+}
+
+.disconnected {
+  background-color: #e74c3c;
+}
+
+/* 应用内容区域 - 左右分栏 */
+.app-content {
+  display: flex;
+  flex: 1;
+  height: calc(100vh - 64px); /* 减去header高度 */
+  overflow: hidden;
+}
+
+/* 左侧输入区域 */
+.input-panel {
+  width: 30%;
+  padding: 1.5rem;
+  background-color: #f9f9f9;
+  border-right: 1px solid #eaeaea;
+  display: flex;
+  flex-direction: column;
+}
+
+.input-panel h2 {
+  margin-bottom: 1rem;
+  color: #2c3e50;
+  font-size: 1.2rem;
+}
+
+.input-instructions {
+  margin-top: 2rem;
+  padding: 1rem;
+  background-color: #f0f0f0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.input-instructions h3 {
+  margin-bottom: 0.5rem;
+  color: #2c3e50;
+  font-size: 1rem;
+}
+
+.input-instructions ul {
+  padding-left: 1.5rem;
+}
+
+.input-instructions li {
+  margin-bottom: 0.5rem;
+}
+
+/* 右侧日志区域 */
+.log-panel {
+  flex: 1;
+  padding: 1.5rem;
+  background-color: white;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-panel h2 {
+  margin-bottom: 1rem;
+  color: #2c3e50;
+  font-size: 1.2rem;
+}
+
+.log-container {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* 消息组件 */
+.message {
+  padding: 1rem;
+  border-radius: 8px;
+  max-width: 100%;
+  font-size: 0.95rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.message.system {
+  background-color: #f8f9fa;
+  border-left: 4px solid #6c757d;
+}
+
+.message.user {
+  background-color: #e3f2fd;
+  border-left: 4px solid #2196f3;
+}
+
+.message.ai {
+  background-color: #f1f8e9;
+  border-left: 4px solid #4caf50;
+}
+
+/* 输入框组件 */
+.chat-input-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background-color: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.chat-input-area {
+  display: flex;
+  align-items: flex-end;
+}
+
+.chat-input-textarea {
+  flex: 1;
+  min-height: 50px;
+  max-height: 150px;
+  padding: 1rem;
+  border: none;
+  resize: none;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.chat-input-button {
+  padding: 0.8rem 1.2rem;
+  background-color: #2c3e50;
+  color: white;
+  border: none;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.chat-input-button:hover {
+  background-color: #1a252f;
+}
+
+.chat-input-button:disabled {
+  background-color: #95a5a6;
+  cursor: not-allowed;
+}
+
+/* 代码块样式 */
+pre {
+  background-color: #282c34;
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+
+code {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+}
+
+/* 响应式设计 */
+@media screen and (max-width: 768px) {
+  .app-content {
+    flex-direction: column;
+    height: auto;
+  }
+  
+  .input-panel {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid #eaeaea;
+  }
+  
+  .log-panel {
+    max-height: 60vh;
+  }
+} 
