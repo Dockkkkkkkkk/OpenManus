@@ -1,7 +1,9 @@
 @echo off
-echo 正在启动OpenManus集成应用...
+echo ===================================
+echo 启动OpenManus AI助手 (前后端不分离版)
+echo ===================================
 
-REM 启动FastAPI应用，它将同时提供前端和API服务
+REM 启动应用
 python main.py
 
-echo 如果应用自动关闭，请查看错误信息。 
+pause 
