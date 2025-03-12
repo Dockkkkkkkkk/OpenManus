@@ -32,14 +32,25 @@ class _BashSession:
         if self._started:
             return
 
+        # 设置进程启动参数
+        kwargs = {
+            "shell": True,
+            "bufsize": 0,
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+        }
+        
+        # 在Unix/Linux系统上使用setsid，Windows上跳过
+        if os.name != 'nt':  # 非Windows系统
+            kwargs["preexec_fn"] = os.setsid
+            
+        # 设置适合当前系统的shell命令
+        if os.name == 'nt':  # Windows系统
+            self.command = "cmd.exe"
+        
         self._process = await asyncio.create_subprocess_shell(
-            self.command,
-            preexec_fn=os.setsid,
-            shell=True,
-            bufsize=0,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            self.command, **kwargs
         )
 
         self._started = True
@@ -85,7 +96,7 @@ class _BashSession:
                     # if we read directly from stdout/stderr, it will wait forever for
                     # EOF. use the StreamReader buffer directly instead.
                     output = (
-                        self._process.stdout._buffer.decode()
+                        self._process.stdout._buffer.decode("gbk" if os.name == "nt" else "utf-8", errors="replace")
                     )  # pyright: ignore[reportAttributeAccessIssue]
                     if self._sentinel in output:
                         # strip the sentinel and break
@@ -101,7 +112,7 @@ class _BashSession:
             output = output[:-1]
 
         error = (
-            self._process.stderr._buffer.decode()
+            self._process.stderr._buffer.decode("gbk" if os.name == "nt" else "utf-8", errors="replace")
         )  # pyright: ignore[reportAttributeAccessIssue]
         if error.endswith("\n"):
             error = error[:-1]

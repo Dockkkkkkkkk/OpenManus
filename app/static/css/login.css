@@ -1,0 +1,182 @@
+/* 登录相关的样式 */
+
+/* 登录对话框 */
+.login-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.login-dialog-content {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    width: 400px;
+    max-width: 90%;
+    overflow: hidden;
+}
+
+.login-dialog-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    border-bottom: 1px solid #eee;
+}
+
+.login-dialog-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #333;
+}
+
+.close-button {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #999;
+}
+
+.close-button:hover {
+    color: #333;
+}
+
+.login-dialog-body {
+    padding: 20px;
+}
+
+.device-code-container {
+    margin: 20px 0;
+    display: flex;
+    justify-content: center;
+}
+
+.user-code {
+    font-size: 24px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    padding: 12px 16px;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    border: 1px dashed #ccc;
+    text-align: center;
+}
+
+.login-actions {
+    margin: 20px 0;
+    display: flex;
+    justify-content: center;
+}
+
+.login-button {
+    background-color: #1a73e8;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.login-button:hover {
+    background-color: #1765cc;
+}
+
+.login-note {
+    text-align: center;
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 20px;
+}
+
+.loading-indicator {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    margin: 20px 0;
+}
+
+.spinner {
+    border: 3px solid rgba(0, 0, 0, 0.1);
+    border-top: 3px solid #1a73e8;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+    margin-bottom: 8px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* 用户信息栏 */
+.user-info-bar {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    padding: 0 10px;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-right: 8px;
+    background-color: #e1e1e1;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    background-color: #ccc;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-size: 16px;
+}
+
+.user-name {
+    font-size: 14px;
+    color: #333;
+    margin-right: 12px;
+}
+
+.logout-button {
+    background-color: transparent;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #666;
+    transition: background-color 0.2s;
+}
+
+.logout-button:hover {
+    background-color: #f5f5f5;
+    color: #333;
+}
+
+/* 登录按钮样式（用于未登录状态的顶部按钮）*/
+.login-button#login-button {
+    margin-left: auto;
+} 

@@ -1,256 +1,311 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const prompt = document.getElementById('prompt');
-    const submitBtn = document.getElementById('submit');
-    const logsContainer = document.getElementById('logs');
-    const filesContainer = document.getElementById('files');
-    const noFilesMessage = document.getElementById('no-files-message');
-    const tabs = document.querySelectorAll('.tab');
-    const tabContents = document.querySelectorAll('.tab-content');
-    const processingIndicator = document.getElementById('processing-indicator');
+document.addEventListener('DOMContentLoaded', function() {
+    // 选项和元素
+    const elements = {
+        prompt: document.getElementById('prompt'),
+        submit: document.getElementById('submit'),
+        logs: document.getElementById('logs'),
+        files: document.getElementById('files'),
+        processingIndicator: document.getElementById('processing-indicator'),
+        tabs: document.querySelectorAll('.tab'),
+        tabContents: document.querySelectorAll('.tab-content'),
+        noFilesMessage: document.getElementById('no-files-message'),
+        fileLoading: document.createElement('div') // 创建文件加载指示器元素
+    };
     
-    let isProcessing = false;
+    // 初始化文件加载指示器
+    elements.fileLoading.className = 'file-loading';
+    elements.fileLoading.innerHTML = '<div class="spinner"></div><div>正在提取文件信息...</div>';
+    elements.fileLoading.style.display = 'none';
+    elements.files.appendChild(elements.fileLoading);
+    
+    // 初始化事件源
     let eventSource = null;
-    let sentMessageIds = new Set();
-
-    // Tab切换
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            const target = tab.getAttribute('data-target');
+    
+    // 初始化已发送消息ID集合
+    const sentMessageIds = new Set();
+    
+    // 生成的文件列表
+    let generatedFiles = [];
+    
+    // 自动滚动日志到底部
+    function scrollLogsToBottom() {
+        elements.logs.scrollTop = elements.logs.scrollHeight;
+    }
+    
+    // 切换到指定标签页
+    function switchToTab(tabName) {
+        // 查找对应的标签页
+        const targetTab = Array.from(elements.tabs).find(tab => 
+            tab.getAttribute('data-target') === tabName);
+        
+        if (targetTab) {
+            // 移除所有active类
+            elements.tabs.forEach(t => t.classList.remove('active'));
+            elements.tabContents.forEach(c => c.classList.remove('active'));
             
-            tabs.forEach(t => t.classList.remove('active'));
-            tabContents.forEach(c => c.classList.remove('active'));
-            
-            tab.classList.add('active');
-            document.getElementById(target).classList.add('active');
-            
-            // 如果切换到文件标签，自动加载文件列表
-            if (target === 'files-tab') {
-                loadFiles();
-            }
-        });
-    });
-
-    // 提交任务
-    submitBtn.addEventListener('click', async () => {
-        if (isProcessing) {
-            return;
+            // 添加active类到目标tab
+            targetTab.classList.add('active');
+            document.getElementById(tabName).classList.add('active');
         }
-        
-        const promptText = prompt.value.trim();
-        if (!promptText) {
-            return;
-        }
-        
-        isProcessing = true;
-        submitBtn.disabled = true;
-        processingIndicator.classList.add('active');
-        
-        // 清空之前的日志和文件列表
-        logsContainer.innerHTML = '';
-        filesContainer.innerHTML = '';
-        noFilesMessage.style.display = 'block';
-        
-        // 添加用户消息
-        appendLog(`用户: ${promptText}`, 'user-message');
-        
-        // 连接SSE
-        connectToEventSource(promptText);
-    });
+    }
+    
+    // 显示文件加载中状态
+    function showFileLoading(show) {
+        elements.fileLoading.style.display = show ? 'flex' : 'none';
+        elements.noFilesMessage.style.display = show || generatedFiles.length > 0 ? 'none' : 'block';
+    }
 
-    function connectToEventSource(promptText) {
-        if (eventSource) {
-            eventSource.close();
-        }
+    // 创建EventSource，用于接收实时日志更新
+    function connectEventSource() {
+        // 创建EventSource实例
+        eventSource = new EventSource('/api/events');
         
-        sentMessageIds.clear();
+        // 连接打开时
+        eventSource.onopen = function() {
+            console.log('事件流连接已建立');
+        };
         
-        // 创建新的EventSource连接
-        eventSource = new EventSource(`/api/run?prompt=${encodeURIComponent(promptText)}`);
-        
-        eventSource.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            
-            // 使用消息ID防止重复显示
-            if (!sentMessageIds.has(data.id)) {
-                sentMessageIds.add(data.id);
+        // 收到消息时
+        eventSource.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
                 
-                if (data.type === 'log') {
-                    let cssClass = 'log-entry';
-                    const logText = data.message;
-                    
-                    if (logText.startsWith('用户:')) {
-                        cssClass += ' user-message';
-                    } else if (logText.startsWith('系统:')) {
-                        cssClass += ' system-message';
-                    } else if (logText.toLowerCase().includes('error') || logText.includes('错误')) {
-                        cssClass += ' error-message';
-                    } else if (logText.startsWith('步骤') || logText.startsWith('Step')) {
-                        cssClass += ' step-message';
+                // 避免重复消息
+                if (!data.id || !sentMessageIds.has(data.id)) {
+                    if (data.id) {
+                        sentMessageIds.add(data.id);
                     }
-                    
-                    appendLog(logText, cssClass);
-                    
-                } else if (data.type === 'file') {
-                    console.log("收到文件消息:", data);
-                    if (noFilesMessage && noFilesMessage.style.display !== 'none') {
-                        noFilesMessage.style.display = 'none';
-                    }
-                    
-                    // 提取文件名
-                    let filename = data.filename;
-                    if (typeof filename === 'object') {
-                        filename = filename.name || filename.path || "未知文件";
-                    }
-                    
-                    appendFile(filename);
-                    
-                } else if (data.type === 'completion') {
-                    appendLog('任务完成', 'system-message');
-                    isProcessing = false;
-                    submitBtn.disabled = false;
-                    processingIndicator.classList.remove('active');
-                    
-                    if (eventSource) {
-                        eventSource.close();
-                        eventSource = null;
-                    }
-                    
-                    // 自动切换到文件标签页
-                    setTimeout(() => {
-                        // 查找文件标签页并激活
-                        const fileTab = document.querySelector('.tab[data-target="files-tab"]');
-                        if (fileTab) {
-                            fileTab.click();
-                        }
-                        
-                        // 刷新文件列表
-                        loadFiles();
-                    }, 500);
+                    handleEvent(data);
                 }
+            } catch (error) {
+                console.error('解析消息出错:', error);
             }
         };
         
-        eventSource.onerror = (error) => {
-            appendLog('错误: 连接中断', 'error-message');
-            isProcessing = false;
-            submitBtn.disabled = false;
-            processingIndicator.classList.remove('active');
+        // 发生错误时
+        eventSource.onerror = function(error) {
+            console.error('事件流错误:', error);
+            eventSource.close();
             
+            // 10秒后尝试重新连接
+            setTimeout(connectEventSource, 10000);
+        };
+    }
+    
+    // 处理事件消息
+    function handleEvent(data) {
+        const eventType = data.type || data.event_type;
+        const content = data.message || data.content;
+        const files = data.files;
+        
+        // 处理不同类型的事件
+        switch (eventType) {
+            case 'log':
+                appendLog(content, data.level || 'log');
+                scrollLogsToBottom();
+                break;
+                
+            case 'error':
+                appendLog(content, 'error');
+                scrollLogsToBottom();
+                break;
+                
+            case 'step':
+                appendLog(content, 'step');
+                scrollLogsToBottom();
+                break;
+                
+            case 'complete':
+            case 'task_complete':
+                elements.submit.disabled = false;
+                elements.processingIndicator.style.display = 'none';
+                appendLog('任务完成', 'system');
+                scrollLogsToBottom();
+                
+                // 切换到文件标签页并显示加载状态
+                setTimeout(() => {
+                    showFileLoading(true);
+                    switchToTab('files-tab');
+                    
+                    // 每隔1秒检查一次文件生成状态
+                    const checkInterval = setInterval(() => {
+                        if (generatedFiles.length > 0) {
+                            showFileLoading(false);
+                            clearInterval(checkInterval);
+                        }
+                    }, 1000);
+                    
+                    // 最多等待10秒
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        showFileLoading(false);
+                    }, 10000);
+                }, 500);
+                break;
+                
+            case 'file':
+            case 'generated_files':
+                if (files) {
+                    updateGeneratedFiles(files);
+                    showFileLoading(false);
+                } else if (data.filename) {
+                    updateGeneratedFiles([data.filename]);
+                    showFileLoading(false);
+                }
+                break;
+                
+            case 'task_failed':
+                elements.submit.disabled = false;
+                elements.processingIndicator.style.display = 'none';
+                appendLog('任务失败: ' + content, 'error');
+                scrollLogsToBottom();
+                break;
+                
+            default:
+                console.log('未知事件类型:', eventType);
+        }
+    }
+    
+    // 添加日志
+    function appendLog(message, type = 'log') {
+        // 创建日志条目元素
+        const logEntry = document.createElement('div');
+        logEntry.className = `log-entry log-${type}`;
+        
+        // 将消息设置为HTML内容（支持Markdown和代码块格式化）
+        logEntry.innerHTML = message;
+        
+        // 添加到日志容器
+        elements.logs.appendChild(logEntry);
+        
+        // 滚动到底部
+        scrollLogsToBottom();
+    }
+    
+    // 更新生成的文件列表
+    function updateGeneratedFiles(files) {
+        if (!files || files.length === 0) {
+            return;
+        }
+        
+        // 更新全局文件列表
+        generatedFiles = [...new Set([...generatedFiles, ...files])];
+        
+        // 清空文件容器
+        elements.files.innerHTML = '';
+        
+        // 隐藏"无文件"消息
+        elements.noFilesMessage.style.display = 'none';
+        
+        // 添加文件加载指示器（但保持隐藏状态）
+        elements.files.appendChild(elements.fileLoading);
+        
+        // 创建文件列表
+        const fileList = document.createElement('ul');
+        fileList.className = 'file-list';
+        
+        // 添加每个文件
+        generatedFiles.forEach(file => {
+            const fileItem = document.createElement('li');
+            fileItem.className = 'file-item';
+            
+            const fileName = document.createElement('span');
+            fileName.className = 'file-name';
+            fileName.textContent = file;
+            
+            fileItem.appendChild(fileName);
+            fileList.appendChild(fileItem);
+            
+            // 添加点击事件，打开文件查看对话框
+            fileItem.addEventListener('click', function() {
+                viewFile(file);
+            });
+        });
+        
+        elements.files.appendChild(fileList);
+    }
+    
+    // 查看文件
+    function viewFile(filename) {
+        // TODO: 实现文件查看功能
+        alert('查看文件: ' + filename);
+    }
+    
+    // 监听任务提交事件
+    elements.submit.addEventListener('click', async function() {
+        const prompt = elements.prompt.value.trim();
+        
+        if (!prompt) {
+            alert('请输入任务描述');
+            return;
+        }
+        
+        try {
+            // 禁用提交按钮，显示处理指示器
+            elements.submit.disabled = true;
+            elements.processingIndicator.style.display = 'block';
+            
+            // 清空日志和文件列表
+            elements.logs.innerHTML = '';
+            elements.files.innerHTML = '';
+            elements.noFilesMessage.style.display = 'block';
+            generatedFiles = [];
+            sentMessageIds.clear();
+            
+            // 重新添加文件加载指示器
+            elements.files.appendChild(elements.fileLoading);
+            
+            // 关闭现有的EventSource连接
             if (eventSource) {
                 eventSource.close();
-                eventSource = null;
-            }
-        };
-    }
-
-    function appendLog(message, cssClass = 'log-entry') {
-        const entry = document.createElement('div');
-        entry.className = cssClass;
-        
-        // 使用markdown格式化
-        const formattedMessage = formatMessage(message);
-        entry.innerHTML = formattedMessage;
-        
-        logsContainer.appendChild(entry);
-        logsContainer.scrollTop = logsContainer.scrollHeight;
-    }
-    
-    function appendFile(filename) {
-        console.log("appendFile被调用, 文件名:", filename);
-        // 如果是对象格式，提取文件名
-        if (typeof filename === 'object') {
-            filename = filename.name || filename.path || filename.filename || "未知文件";
-        }
-        
-        const fileItem = document.createElement('div');
-        fileItem.className = 'file-item';
-        
-        const fileName = document.createElement('div');
-        fileName.className = 'file-name';
-        fileName.textContent = filename;
-        
-        const downloadLink = document.createElement('a');
-        downloadLink.className = 'download-link';
-        downloadLink.href = `/api/download?filename=${encodeURIComponent(filename)}`;
-        downloadLink.textContent = '下载';
-        downloadLink.setAttribute('download', '');
-        
-        fileItem.appendChild(fileName);
-        fileItem.appendChild(downloadLink);
-        filesContainer.appendChild(fileItem);
-        
-        // 确保无文件消息被隐藏
-        if (noFilesMessage) {
-            noFilesMessage.style.display = 'none';
-        }
-    }
-    
-    async function loadFiles() {
-        try {
-            console.log("正在加载文件列表...");
-            const response = await fetch('/api/files');
-            if (!response.ok) {
-                throw new Error(`获取文件列表失败，状态码: ${response.status}`);
             }
             
-            const data = await response.json();
-            console.log("文件列表数据:", data);
+            // 创建FormData对象
+            const formData = new FormData();
+            formData.append('prompt', prompt);
             
-            // 清空文件容器
-            filesContainer.innerHTML = '';
+            // 使用fetchWithAuth处理API请求，自动处理认证失败
+            const result = await window.Auth.fetchWithAuth('/api/process', {
+                method: 'POST',
+                body: formData
+            });
             
-            if (data.files && data.files.length > 0) {
-                // 隐藏无文件消息
-                if (noFilesMessage) {
-                    noFilesMessage.style.display = 'none';
-                }
-                
-                console.log(`显示 ${data.files.length} 个文件`);
-                
-                // 添加文件项
-                data.files.forEach(file => {
-                    console.log("添加文件:", file);
-                    let filename = file;
-                    
-                    // 处理可能的对象格式
-                    if (typeof file === 'object') {
-                        filename = file.name || file.path || "未知文件";
-                    }
-                    
-                    appendFile(filename);
-                });
-            } else {
-                console.log("未找到文件");
-                // 显示无文件消息
-                filesContainer.innerHTML = '<div class="no-files-message">暂无生成文件</div>';
+            // 如果是认证中状态，不继续处理
+            if (result._auth_in_progress) {
+                console.log('用户正在登录中，暂停处理');
+                // 恢复按钮状态
+                elements.submit.disabled = false;
+                elements.processingIndicator.style.display = 'none';
+                return;
             }
+            
+            // 处理响应
+            if (!result.ok) {
+                throw new Error(`任务提交失败: ${result.status}`);
+            }
+            
+            // 创建新的EventSource连接
+            connectEventSource();
+            
+            // 切换到日志标签页
+            switchToTab('logs-tab');
+            
         } catch (error) {
-            console.error('加载文件列表失败:', error);
-            filesContainer.innerHTML = `<div class="no-files-message">加载文件列表失败: ${error.message}</div>`;
+            console.error('任务提交错误:', error);
+            alert('提交任务时出错：' + error.message);
+            elements.submit.disabled = false;
+            elements.processingIndicator.style.display = 'none';
         }
-    }
+    });
     
-    function formatMessage(message) {
-        // 移除制表符前缀
-        message = message.replace(/^\s+/, '');
-        
-        // 代码块处理
-        message = message.replace(/```([\s\S]*?)```/g, function(match, code) {
-            return `<pre><code>${escapeHtml(code)}</code></pre>`;
+    // Tab切换
+    elements.tabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+            const target = this.getAttribute('data-target');
+            switchToTab(target);
         });
-        
-        // 内联代码处理
-        message = message.replace(/`([^`]+)`/g, '<code>$1</code>');
-        
-        // 保持换行符
-        message = message.replace(/\n/g, '<br>');
-        
-        return message;
-    }
+    });
     
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+    // 初始化连接
+    connectEventSource();
 }); 

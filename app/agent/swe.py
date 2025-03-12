@@ -31,7 +31,10 @@ class SWEAgent(ToolCallAgent):
         # Update working directory
         self.working_dir = await self.bash.execute("pwd")
         self.next_step_prompt = self.next_step_prompt.format(
-            current_dir=self.working_dir
+            current_dir=self.working_dir,
+            observation="",
+            open_file="",
+            working_dir=self.working_dir
         )
 
         return await super().think()

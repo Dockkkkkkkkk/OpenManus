@@ -9,6 +9,8 @@
     <title>OpenManus - 智能AI代码生成器</title>
     <!-- 外部CSS文件引用 -->
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/login.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
 </head>
 <body>
     <style id="override-styles">
@@ -32,6 +34,7 @@
     </style>
     <header class="header">
         <h1>OpenManus</h1>
+        <!-- 认证状态将由login.js动态添加 -->
     </header>
 
     <div class="main-container">
@@ -54,7 +57,7 @@
             
             <!-- 日志内容 -->
             <div id="logs-tab" class="tab-content active">
-                <div id="logs" class="logs-container"></div>
+                <div id="logs" class="logs-container markdown-body"></div>
             </div>
             
             <!-- 文件内容 -->
@@ -67,6 +70,8 @@
     </div>
 
     <!-- 外部JS文件引用 -->
-    <script src="/static/js/main.js"></script>
+    <script src="/static/js/auth.js?v=1.0.1"></script>
+    <script src="/static/js/login.js?v=1.0.0"></script>
+    <script src="/static/js/main.js?v=1.0.1"></script>
 </body>
 </html> 

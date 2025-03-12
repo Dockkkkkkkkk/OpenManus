@@ -17,3 +17,11 @@ api_key = "sk-cse13a3c331f3c6e74210ba91ffc7a165dce002b493YTZ2v"
 model = "gpt-4o"
 api_key = "sk-cse13a3c331f3c6e74210ba91ffc7a165dce002b493YTZ2v"
 api_base = "https://api.gptsapi.net/v1"
+
+# OpenManus configuration
+[auth]
+required = true  # 是否需要认证才能使用
+base_url = "http://www.dlb.org.cn/auth"  # 认证服务基础URL
+client_id = "client1"  # 客户端ID
+client_secret = ""  # 客户端密钥
+scope = "profile"  # 认证范围

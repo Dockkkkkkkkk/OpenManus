@@ -1,190 +1,314 @@
+/* OpenManus 基础样式 */
+
+/* 基础重置 */
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
-body { 
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    height: 100vh;
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    color: #333;
+    background-color: #f7f9fc;
+    padding: 0;
+    margin: 0;
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
-    background-color: #f6f8fa;
-    overflow: hidden;
 }
 
+/* 头部样式 */
 .header {
-    background: #24292e;
+    background-color: #1a73e8;
     color: white;
-    padding: 0.6rem 1.5rem;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-    z-index: 10;
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .header h1 {
     margin: 0;
     font-size: 1.5rem;
+    font-weight: 500;
 }
 
+/* 主容器 */
 .main-container {
-    flex: 1;
     display: flex;
-    height: calc(100vh - 50px);
-    max-width: 100%;
-    overflow: hidden;
+    flex: 1;
+    flex-direction: column;
+    height: calc(100vh - 64px); /* 减去头部高度 */
 }
 
+@media (min-width: 1024px) {
+    .main-container {
+        flex-direction: row;
+    }
+}
+
+/* 输入面板 */
 .input-panel {
-    width: 320px;
-    display: flex;
-    flex-direction: column;
+    background-color: white;
+    flex: 1;
     padding: 1rem;
-    background: white;
-    border-right: 1px solid #e1e4e8;
-}
-
-.log-panel {
-    flex: 1;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    max-height: 40%;
+    min-height: 250px;
     display: flex;
     flex-direction: column;
-    min-width: 0;
-    background: white;
 }
 
-.tab-container {
-    display: flex;
-    border-bottom: 1px solid #e1e4e8;
-    padding: 0.5rem 1rem 0;
-    background: #f6f8fa;
-}
-
-.tab {
-    padding: 0.5rem 1rem;
-    cursor: pointer;
-    background: #eef1f5;
-    border: 1px solid #e1e4e8;
-    border-bottom: none;
-    border-radius: 6px 6px 0 0;
-    margin-right: 0.5rem;
-}
-
-.tab.active {
-    background: white;
-    border-bottom: 1px solid white;
-    margin-bottom: -1px;
-    font-weight: 600;
-}
-
-.tab-content {
-    display: none;
-    flex: 1;
-    overflow: hidden;
-}
-
-.tab-content.active {
-    display: flex;
-    flex-direction: column;
+@media (min-width: 1024px) {
+    .input-panel {
+        max-width: 35%;
+        max-height: none;
+        height: 100%;
+        overflow-y: auto;
+    }
 }
 
 .panel-header {
-    margin: 0 0 1rem 0;
-    color: #24292e;
+    margin-bottom: 1rem;
+    color: #444;
     font-size: 1.2rem;
-    font-weight: 600;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #e1e4e8;
+    font-weight: 500;
 }
 
 .input-container {
     display: flex;
     flex-direction: column;
-    flex: 1;
+    height: 100%;
 }
 
-textarea {
-    flex: 1;
+#prompt {
+    flex-grow: 1;
     padding: 0.8rem;
-    border: 1px solid #e1e4e8;
-    border-radius: 6px;
-    font-size: 14px;
-    font-family: inherit;
+    border: 1px solid #ddd;
+    border-radius: 4px;
     resize: none;
+    min-height: 120px;
+    font-family: inherit;
     margin-bottom: 1rem;
-    min-height: 150px;
 }
 
-textarea:focus {
-    outline: none;
-    border-color: #0366d6;
-    box-shadow: 0 0 0 3px rgba(3,102,214,0.3);
-}
-
-button {
-    padding: 0.8rem;
-    background: #2ea44f;
+#submit {
+    background-color: #1a73e8;
     color: white;
     border: none;
-    border-radius: 6px;
-    font-size: 14px;
-    font-weight: 500;
+    padding: 0.8rem;
+    border-radius: 4px;
     cursor: pointer;
     transition: background-color 0.2s;
+    font-size: 1rem;
 }
 
-button:hover {
-    background: #2c974b;
+#submit:hover {
+    background-color: #1765cc;
 }
 
+#submit:disabled {
+    background-color: #a0c2f9;
+    cursor: not-allowed;
+}
+
+.processing-indicator {
+    display: none;
+    margin-top: 1rem;
+    text-align: center;
+    color: #666;
+}
+
+/* 日志面板 */
+.log-panel {
+    flex: 2;
+    background-color: white;
+    border-top: 1px solid #eee;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 200px); /* 使用视口高度减去其他元素的高度 */
+    min-height: 400px; /* 设置最小高度 */
+    overflow: hidden; /* 防止内容溢出 */
+}
+
+@media (min-width: 1024px) {
+    .log-panel {
+        border-top: none;
+        border-left: 1px solid #eee;
+        height: calc(100vh - 100px); /* 在大屏幕上可以占用更多空间 */
+    }
+}
+
+.tab-container {
+    display: flex;
+    border-bottom: 1px solid #eee;
+    background-color: #f5f5f5;
+}
+
+.tab {
+    padding: 0.8rem 1.5rem;
+    cursor: pointer;
+    color: #666;
+    border-bottom: 2px solid transparent;
+}
+
+.tab.active {
+    color: #1a73e8;
+    border-bottom-color: #1a73e8;
+    background-color: white;
+}
+
+.tab-content {
+    display: none;
+    flex: 1;
+    overflow-y: auto;
+    height: calc(100% - 45px); /* 减去tab栏的高度 */
+    position: relative;
+}
+
+.tab-content.active {
+    display: block;
+    height: calc(100% - 45px); /* 保持高度一致 */
+    overflow-y: auto;
+}
+
+/* 日志容器 */
 .logs-container {
-    flex: 1;
-    overflow-y: auto;
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-    font-size: 13px;
-    line-height: 1.6;
     padding: 1rem;
-    margin: 0;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    color: #24292e;
-    background-color: white !important;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden; /* 防止水平滚动 */
+    word-break: break-word; /* 长文本自动换行 */
 }
 
+.log-entry {
+    margin-bottom: 0.8rem;
+    padding: 0.6rem;
+    border-radius: 4px;
+    overflow-wrap: break-word;
+    line-height: 1.5;
+}
+
+.log-step {
+    border-left: 3px solid #1a73e8;
+    background-color: #f0f7ff;
+    font-weight: 500;
+}
+
+.log-error {
+    border-left: 3px solid #e53935;
+    background-color: #ffebee;
+    color: #c62828;
+}
+
+.log-system {
+    border-left: 3px solid #43a047;
+    background-color: #e8f5e9;
+    color: #2e7d32;
+}
+
+/* 文件容器 */
 .files-container {
-    flex: 1;
-    overflow-y: auto;
     padding: 1rem;
+    height: 100%;
+    overflow-y: auto;
 }
 
 .no-files-message {
-    padding: 2rem;
-    text-align: center;
-    color: #6a737d;
+    color: #999;
     font-style: italic;
+    text-align: center;
+    margin-top: 2rem;
+}
+
+.file-list {
+    list-style: none;
 }
 
 .file-item {
     padding: 0.8rem;
-    border-bottom: 1px solid #e1e4e8;
+    border-radius: 4px;
+    border: 1px solid #eee;
+    margin-bottom: 0.6rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.file-item:hover {
+    background-color: #f5f5f5;
+}
+
+.file-name {
+    word-break: break-all;
+}
+
+/* 文件对话框 */
+.file-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.file-dialog-content {
+    background-color: white;
+    border-radius: 4px;
+    width: 80%;
+    max-width: 1000px;
+    max-height: 80vh;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    display: flex;
+    flex-direction: column;
+}
+
+.file-dialog-header {
+    padding: 1rem;
+    border-bottom: 1px solid #eee;
     display: flex;
     align-items: center;
     justify-content: space-between;
 }
 
-.file-item:last-child {
-    border-bottom: none;
-}
-
-.file-name {
+.file-dialog-header h3 {
+    margin: 0;
+    font-size: 1.2rem;
     font-weight: 500;
+    color: #333;
+    word-break: break-all;
 }
 
-.download-link {
-    color: #0366d6;
-    text-decoration: none;
+.close-button {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    color: #999;
+    cursor: pointer;
+    line-height: 1;
 }
 
-.download-link:hover {
-    text-decoration: underline;
+.file-dialog-body {
+    padding: 1rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.file-dialog-body pre {
+    margin: 0;
+    padding: 1rem;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
 }
 
 .logs-container::-webkit-scrollbar {
@@ -203,14 +327,6 @@ button:hover {
 
 .logs-container::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
-}
-
-.log-entry {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #eaecef;
-    background-color: white !important;
-    background: white !important;
-    border-left: none !important;
 }
 
 .log-entry:last-child {
@@ -283,19 +399,207 @@ code {
     border-radius: 3px;
 }
 
-/* 处理中状态显示 */
-.processing-indicator {
-    display: none;
-    padding: 0.5rem;
-    margin-top: 0.5rem;
-    background-color: #fffbdd;
-    border: 1px solid #ffe58f;
-    border-radius: 6px;
-    color: #735c0f;
-    font-size: 12px;
-    text-align: center;
+/* 认证相关的样式 */
+.auth-container {
+    display: flex;
+    align-items: center;
+    position: absolute;
+    right: 20px;
+    top: 0;
+    height: 100%;
 }
 
-.processing-indicator.active {
-    display: block;
+.login-button {
+    background-color: #4caf50;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.login-button:hover {
+    background-color: #45a049;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-color: #e1e4e8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: #24292e;
+    font-size: 14px;
+}
+
+.user-avatar img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.user-name {
+    font-size: 14px;
+    color: white;
+}
+
+.logout-button {
+    background: none;
+    border: none;
+    color: #ccc;
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 8px;
+}
+
+.logout-button:hover {
+    color: white;
+    text-decoration: underline;
+}
+
+/* 登录对话框 */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal {
+    background-color: white;
+    border-radius: 8px;
+    padding: 24px;
+    width: 400px;
+    max-width: 90%;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.modal-title {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #666;
+}
+
+.modal-body {
+    margin-bottom: 24px;
+}
+
+.user-code {
+    font-family: monospace;
+    font-size: 24px;
+    letter-spacing: 2px;
+    text-align: center;
+    margin: 16px 0;
+    padding: 12px;
+    background-color: #f6f8fa;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.open-login-button {
+    background-color: #2ea44f;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.open-login-button:hover {
+    background-color: #2c974b;
+}
+
+/* 文件加载指示器 */
+.file-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    color: #666;
+    width: 100%;
+    height: 100%;
+    min-height: 200px;
+}
+
+.file-loading .spinner {
+    width: 40px;
+    height: 40px;
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #1a73e8;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* 文件列表样式增强 */
+.file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.file-item {
+    margin: 0.5rem 0;
+    padding: 0.8rem 1rem;
+    background-color: #f8f9fa;
+    border-left: 3px solid #1a73e8;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.file-item:hover {
+    background-color: #e8f0fe;
+}
+
+.file-name {
+    font-weight: 500;
+    color: #333;
 } 

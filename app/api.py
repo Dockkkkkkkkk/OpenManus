@@ -21,6 +21,21 @@ import random
 import traceback
 from datetime import datetime, timedelta
 import platform
+import httpx
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.responses import JSONResponse
+from app.auth import Web, update_auth_config
+from app.auth_routes import router as auth_router
+# 导入任务管理路由
+from app.routes.task_routes import router as task_router
+# 导入页面路由
+try:
+    from app.routes import router as pages_router
+except ImportError:
+    # 如果从app.routes导入router失败，则直接创建一个空路由器
+    from fastapi import APIRouter
+    pages_router = APIRouter(tags=["pages"])
+    print("警告: 无法导入页面路由，将使用空路由器")
 try:
     from ai_file_identifier import AIFileIdentifier
 except ImportError:
@@ -28,6 +43,13 @@ except ImportError:
     pass
 
 app = FastAPI()
+
+# 注册认证路由
+app.include_router(auth_router)
+# 注册任务路由
+app.include_router(task_router)
+# 注册页面路由
+app.include_router(pages_router)
 
 # 添加CORS中间件
 app.add_middleware(
@@ -70,47 +92,82 @@ CSS_DIR.mkdir(exist_ok=True)
 JS_DIR = STATIC_DIR / "js"
 JS_DIR.mkdir(exist_ok=True)
 
+# 认证相关设置
+AUTH_REQUIRED = False  # 是否需要认证才能使用
+AUTH_BASE_URL = "http://localhost:8000"  # 用户中心的基础URL
+
 # 读取配置文件
 try:
-    config = toml.load("config/config.toml")
-    openai_api_key = config.get("llm", {}).get("api_key", "")
-    openai_model = config.get("llm", {}).get("model", "gpt-4o")
-    openai_base_url = config.get("llm", {}).get("base_url", "")
-    
-    # 设置OpenAI客户端配置
-    if openai_api_key:
-        # 确保安装了最新的openai库
-        try:
-            # 使用新的客户端方式
-            if openai_base_url:
-                print(f"使用自定义API基础URL: {openai_base_url}")
-                client = openai.OpenAI(
-                    api_key=openai_api_key,
-                    base_url=openai_base_url
-                )
-                # 同时设置全局配置（兼容旧代码）
+    if os.path.exists('config/config.toml'):
+        print("正在加载配置文件: config/config.toml")
+        config = toml.load('config/config.toml')
+        
+        # 读取 OpenAI 配置
+        openai_api_key = config.get("llm", {}).get("api_key", "")
+        openai_model = config.get("llm", {}).get("model", "gpt-4o")
+        openai_base_url = config.get("llm", {}).get("base_url", "")
+        
+        # 设置认证选项
+        auth_config = config.get('auth', {})
+        AUTH_REQUIRED = auth_config.get("required", False)
+        AUTH_BASE_URL = auth_config.get("base_url", "http://localhost:8000")
+        AUTH_CLIENT_ID = auth_config.get("client_id", "openmanus")
+        AUTH_CLIENT_SECRET = auth_config.get("client_secret", "")
+        AUTH_SCOPE = auth_config.get("scope", "profile")
+        
+        # 打印认证配置详情
+        print("=== 认证配置详情 ===")
+        print(f"AUTH_REQUIRED = {AUTH_REQUIRED}")
+        print(f"AUTH_BASE_URL = {AUTH_BASE_URL}")
+        print(f"AUTH_CLIENT_ID = {AUTH_CLIENT_ID}")
+        print(f"AUTH_CLIENT_SECRET = {'*' * len(AUTH_CLIENT_SECRET) if AUTH_CLIENT_SECRET else '(空)'}")
+        print(f"AUTH_SCOPE = {AUTH_SCOPE}")
+        print("====================")
+        
+        # 更新认证模块的配置
+        update_auth_config(
+            required=AUTH_REQUIRED, 
+            base_url=AUTH_BASE_URL, 
+            client_id=AUTH_CLIENT_ID, 
+            client_secret=AUTH_CLIENT_SECRET
+        )
+        
+        print(f"认证设置: 需要认证={AUTH_REQUIRED}, 认证服务URL={AUTH_BASE_URL}")
+        
+        # 设置OpenAI客户端配置
+        if openai_api_key:
+            # 确保安装了最新的openai库
+            try:
+                # 使用新的客户端方式
+                if openai_base_url:
+                    print(f"使用自定义API基础URL: {openai_base_url}")
+                    client = openai.OpenAI(
+                        api_key=openai_api_key,
+                        base_url=openai_base_url
+                    )
+                    # 同时设置全局配置（兼容旧代码）
+                    openai.api_key = openai_api_key
+                    openai.base_url = openai_base_url
+                else:
+                    # 否则仅设置api_key
+                    client = openai.OpenAI(api_key=openai_api_key)
+                    openai.api_key = openai_api_key
+                    
+                # 测试客户端连接
+                print("测试OpenAI客户端连接...")
+                models = client.models.list()
+                print(f"连接成功! 可用模型数量: {len(models.data) if hasattr(models, 'data') else '未知'}")
+            except Exception as client_error:
+                print(f"创建OpenAI客户端时出错: {str(client_error)}")
+                # 尝试使用旧版兼容模式
+                print("尝试使用兼容模式...")
                 openai.api_key = openai_api_key
-                openai.base_url = openai_base_url
-            else:
-                # 否则仅设置api_key
-                client = openai.OpenAI(api_key=openai_api_key)
-                openai.api_key = openai_api_key
-                
-            # 测试客户端连接
-            print("测试OpenAI客户端连接...")
-            models = client.models.list()
-            print(f"连接成功! 可用模型数量: {len(models.data) if hasattr(models, 'data') else '未知'}")
-        except Exception as client_error:
-            print(f"创建OpenAI客户端时出错: {str(client_error)}")
-            # 尝试使用旧版兼容模式
-            print("尝试使用兼容模式...")
-            openai.api_key = openai_api_key
-            if openai_base_url:
-                openai.api_base = openai_base_url
+                if openai_base_url:
+                    openai.api_base = openai_base_url
+                client = None
+        else:
             client = None
-    else:
-        client = None
-        print("警告: 未配置OpenAI API密钥")
+            print("警告: 未配置OpenAI API密钥")
 except Exception as e:
     print(f"读取配置文件失败: {str(e)}")
     openai_api_key = ""
@@ -298,6 +355,44 @@ async def event_generator():
     
     print(f"SSE连接 {connection_id} 已结束")
 
+# 添加event_generator的辅助方法
+# 发送日志消息
+def event_generator_send_log(message, level="info"):
+    try:
+        if message_queue:
+            message_queue.put_nowait({
+                "content": message,
+                "level": level
+            })
+    except Exception as e:
+        print(f"发送日志消息错误: {str(e)}")
+
+# 发送文件通知
+def event_generator_send_file(file_path):
+    try:
+        if message_queue:
+            message_queue.put_nowait({
+                "content": f"已识别文件: {file_path}",
+                "file": file_path
+            })
+    except Exception as e:
+        print(f"发送文件通知错误: {str(e)}")
+
+# 发送完成事件
+def event_generator_send_completion():
+    try:
+        if message_queue:
+            message_queue.put_nowait({
+                "content": "处理完成"
+            })
+    except Exception as e:
+        print(f"发送完成事件错误: {str(e)}")
+
+# 设置静态方法
+event_generator.send_log = event_generator_send_log
+event_generator.send_file = event_generator_send_file
+event_generator.send_completion = event_generator_send_completion
+
 # 如果前端构建目录存在，则挂载静态文件
 frontend_dist = FRONTEND_DIR / "dist"
 if frontend_dist.exists() and (frontend_dist / "assets").exists():
@@ -361,7 +456,8 @@ if not INDEX_HTML_PATH.exists():
         f.write('</html>\n')
 
 @app.get("/api/logs")
-async def stream_logs():
+@Web(auth_required=False)  # 不需要认证 - 日志流可以公开访问
+async def stream_logs(request: Request):
     """提供日志流端点"""
     headers = {
         "Cache-Control": "no-cache",
@@ -374,8 +470,24 @@ async def stream_logs():
         headers=headers
     )
 
+@app.get("/api/events")
+@Web(auth_required=False)  # 不需要认证 - 事件流可以公开访问
+async def stream_events(request: Request):
+    """提供事件流端点（替代/api/logs，供前端使用）"""
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream"
+    }
+    return StreamingResponse(
+        event_generator(), 
+        media_type="text/event-stream",
+        headers=headers
+    )
+
 @app.post("/api/prompt")
-async def handle_prompt(prompt_data: dict):
+@Web()  # 默认需要认证
+async def handle_prompt(request: Request, prompt_data: dict):
     """处理用户输入的提示，替代控制台输入"""
     try:
         # 从JSON对象中提取prompt字段
@@ -793,32 +905,47 @@ async def _aiter_stream(stream):
         traceback.print_exc()
         yield f"生成过程中发生错误: {str(e)}"
 
-# 添加异步处理提示的函数
-async def process_prompt_with_agent(agent, prompt):
-    """使用智能体处理用户提示词
-    
-    Args:
-        agent: 智能体实例
-        prompt: 用户提示词
-    
-    Returns:
-        生成的文件列表
-    """
+# 修改process_prompt_with_agent方法，支持用户信息
+async def process_prompt_with_agent(prompt, model="gpt-4", user_info=None):
+    """处理提示并记录日志，支持用户信息"""
     global generated_files, current_task_logs, pure_logs, logs_processor_callback
     
-    # 重置任务状态
-    generated_files = []
-    current_task_logs = []
-    pure_logs = []
-    
-    # 用于跟踪分段任务的状态
-    task_status = {
-        "current_logs_length": 0,
-        "segment_size": 20000,  # 每20000个字符触发一次处理
-        "segments": []
-    }
-    
     try:
+        # 创建任务记录
+        user_id = user_info.get('user_id', 'anonymous') if user_info else 'anonymous'
+        
+        # 导入任务服务（延迟导入避免循环引用）
+        from app.services.task_service import task_service
+        
+        # 记录任务开始信息
+        task_id = await task_service.create_task(user_id, prompt)
+        await task_service.update_task_status(task_id, "running")
+        
+        # 记录任务开始信息
+        log_message = f"任务开始 - 模型: {model} - 任务ID: {task_id}"
+        
+        # 添加用户信息（如果有）
+        if user_info:
+            log_message += f" - 用户: {user_info.get('username', '未知用户')}"
+        
+        # 记录到任务日志
+        await task_service.append_task_logs(task_id, log_message)
+        
+        # 发送到前端
+        event_generator.send_log(log_message, level="system")
+        
+        # 重置任务状态
+        generated_files = []
+        current_task_logs = []
+        pure_logs = []
+        
+        # 用于跟踪分段任务的状态
+        task_status = {
+            "current_logs_length": 0,
+            "segment_size": 20000,  # 每20000个字符触发一次处理
+            "segments": []
+        }
+        
         # 记录输入的提示
         print(f"执行任务: {prompt}")
         
@@ -827,9 +954,13 @@ async def process_prompt_with_agent(agent, prompt):
             # 清理日志内容
             cleaned_log = message  # 日志已在log_interceptor中清理过
             
-            # 添加到纯净日志
+            # 添加到纯净日志和任务日志
             if cleaned_log:
                 pure_logs.append(cleaned_log)
+                current_task_logs.append(cleaned_log)
+                
+                # 异步方式记录到数据库
+                asyncio.create_task(task_service.append_task_logs(task_id, cleaned_log))
                 
                 # 检查日志长度并触发处理
                 task_status["current_logs_length"] += len(cleaned_log)
@@ -852,7 +983,7 @@ async def process_prompt_with_agent(agent, prompt):
                 print(f"开始处理第 {segment_num} 段日志，长度: {len(segment_text)} 字符")
                 
                 # 识别文件
-                segment_files = await identify_generated_files(segment_text, prompt=prompt)
+                segment_files = await identify_generated_files(segment_text, prompt)
                 if segment_files:
                     print(f"第 {segment_num} 段识别到 {len(segment_files)} 个文件")
                     for file in segment_files:
@@ -860,11 +991,23 @@ async def process_prompt_with_agent(agent, prompt):
                             generated_files.append(file)
                             print(f"添加新文件: {file}")
                             
-                            # 发送文件通知给前端
-                            message_queue.put_nowait({
-                                "content": f"识别到新文件: {file}",
-                                "file": file
-                            })
+                            # 上传文件到COS并记录到数据库
+                            try:
+                                # 上传文件到COS
+                                print(f"上传文件到COS: {file}")
+                                uploaded_file = await task_service.upload_local_file(
+                                    task_id=task_id,
+                                    filepath=file
+                                )
+                                
+                                # 发送文件通知给前端
+                                if uploaded_file:
+                                    event_generator.send_file(uploaded_file["filename"])
+                                    print(f"文件上传成功: {uploaded_file['filename']} -> {uploaded_file['cos_url']}")
+                            except Exception as upload_error:
+                                print(f"上传文件失败: {str(upload_error)}")
+                                # 失败时仍然发送文件信息
+                                event_generator.send_file(os.path.basename(file))
                 else:
                     print(f"第 {segment_num} 段未识别到文件")
             except Exception as e:
@@ -872,6 +1015,17 @@ async def process_prompt_with_agent(agent, prompt):
         
         # 设置全局回调
         logs_processor_callback = logs_processor
+        
+        # 创建并配置智能体
+        from app.agent.swe import SWEAgent
+        
+        # 根据模型创建智能体
+        agent = SWEAgent()
+        agent.llm.model = model
+        
+        # 如果用户已登录，添加用户信息到智能体
+        if user_info:
+            agent.user_info = user_info
         
         # 执行智能体任务
         await agent.run(prompt)
@@ -886,41 +1040,63 @@ async def process_prompt_with_agent(agent, prompt):
         if current_task_logs:
             all_logs = "\n".join(current_task_logs)
             print(f"执行最终文件识别，总日志长度: {len(all_logs)} 字符")
-            final_files = await identify_generated_files(all_logs, prompt=prompt)
+            final_files = await identify_generated_files(all_logs, prompt)
             for file in final_files:
                 if file not in generated_files:
                     generated_files.append(file)
-                    # 发送文件通知给前端
-                    message_queue.put_nowait({
-                        "content": f"识别到新文件: {file}",
-                        "file": file
-                    })
+                    
+                    # 上传文件到COS并记录到数据库
+                    try:
+                        # 上传文件到COS
+                        print(f"上传最终文件到COS: {file}")
+                        uploaded_file = await task_service.upload_local_file(
+                            task_id=task_id,
+                            filepath=file
+                        )
+                        
+                        # 发送文件通知给前端
+                        if uploaded_file:
+                            event_generator.send_file(uploaded_file["filename"])
+                            print(f"最终文件上传成功: {uploaded_file['filename']} -> {uploaded_file['cos_url']}")
+                    except Exception as upload_error:
+                        print(f"上传最终文件失败: {str(upload_error)}")
+                        # 失败时仍然发送文件信息
+                        event_generator.send_file(os.path.basename(file))
         
         # 清除回调
         logs_processor_callback = None
         
-        # 发送完成标记
-        log_interceptor("处理完成")
+        # 更新任务状态为完成
+        await task_service.update_task_status(task_id, "completed")
         
-        # 返回生成的文件列表
-        return {"files": generated_files}
+        # 发送完成标记
+        event_generator.send_completion()
+        
+        # 返回生成的文件列表和任务ID
+        return {"files": generated_files, "task_id": task_id}
     except Exception as e:
         error_msg = f"处理任务时出错: {str(e)}"
         print(error_msg)
         import traceback
         traceback.print_exc()
         
+        # 更新任务状态为失败
+        if 'task_id' in locals():
+            await task_service.update_task_status(task_id, "failed", str(e))
+        
         # 发送错误消息
-        log_interceptor(error_msg)
+        event_generator.send_log(error_msg, level="error")
         
         # 即使出错也尝试发送完成标记
-        log_interceptor("处理完成")
+        event_generator.send_completion()
         
-        return {"error": error_msg}
+        # 重新抛出异常
+        raise
 
 # 添加新的API端点
 @app.get("/api/files")
-async def get_generated_files():
+@Web()  # 默认需要认证
+async def get_generated_files(request: Request):
     """获取当前任务生成的文件列表和任务摘要"""
     file_list = []
     
@@ -952,7 +1128,8 @@ async def get_generated_files():
     }
 
 @app.get("/api/download/{file_name}")
-async def download_file(file_name: str):
+@Web()  # 默认需要认证
+async def download_file(request: Request, file_name: str):
     """下载指定的文件（路径参数版本）"""
     # 查找匹配的文件
     # 兼容generated_files为字符串列表或字典列表的情况
@@ -981,7 +1158,8 @@ async def download_file(file_name: str):
     )
 
 @app.get("/api/download")
-async def download_file_query(filename: str):
+@Web()  # 默认需要认证
+async def download_file_query(request: Request, filename: str):
     """下载指定的文件（查询参数版本）"""
     # 查找匹配的文件
     matching_files = []
@@ -1005,7 +1183,8 @@ async def download_file_query(filename: str):
     )
 
 @app.get("/api/history")
-async def get_history():
+@Web()  # 默认需要认证
+async def get_history(request: Request):
     """获取对话历史记录"""
     return {"history": conversation_history}
 
@@ -1014,7 +1193,8 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/api/run")
-async def run_task(prompt: str):
+@Web()  # 默认需要认证
+async def run_task(request: Request, prompt: str):
     """处理用户输入的提示并返回事件流"""
     headers = {
         "Cache-Control": "no-cache",
@@ -1032,6 +1212,7 @@ async def run_task(prompt: str):
     )
 
 @app.get("/{full_path:path}")
+@Web(auth_required=False)  # 不需要认证 - 静态文件和前端页面公开访问
 async def serve_frontend(request: Request, full_path: str):
     """提供前端页面，作为默认路由返回静态index.html文件"""
     headers = {
@@ -1040,11 +1221,142 @@ async def serve_frontend(request: Request, full_path: str):
         "Expires": "0"
     }
     
+    # 如果有静态HTML文件，直接返回
     if full_path.strip() == "" or full_path == "index.html":
+        # 检查app/static目录下是否有index.html
+        static_index_path = STATIC_DIR / "index.html"
+        if static_index_path.exists():
+            return FileResponse(static_index_path, headers=headers)
+        
         # 使用静态HTML文件
         if INDEX_HTML_PATH.exists():
             return FileResponse(INDEX_HTML_PATH, headers=headers)
         else:
-            return Response(content=f"前端文件不存在: {INDEX_HTML_PATH}", status_code=404)
+            # 如果静态文件不存在，动态生成
+            # 定义样式表和JS脚本
+            css_files = [
+                "/static/css/styles.css",
+                "/static/css/login.css"
+            ]
+            
+            js_files = [
+                "/static/js/auth.js?v=1.0.1",
+                "/static/js/login.js?v=1.0.0",
+                "/static/js/main.js?v=1.0.1"
+            ]
+            
+            # 生成HTML
+            html_content = '<!DOCTYPE html>\n'
+            html_content += '<html lang="zh-CN">\n'
+            html_content += '<head>\n'
+            html_content += '    <meta charset="UTF-8">\n'
+            html_content += '    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            html_content += '    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">\n'
+            html_content += '    <meta http-equiv="Pragma" content="no-cache">\n'
+            html_content += '    <meta http-equiv="Expires" content="0">\n'
+            html_content += '    <title>OpenManus - 智能AI代码生成器</title>\n'
+            
+            # 添加CSS样式
+            for css_file in css_files:
+                html_content += f'    <link rel="stylesheet" href="{css_file}?v={uuid.uuid4().hex[:8]}">\n'
+            
+            # 添加外部CSS
+            html_content += '    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">\n'
+            html_content += '</head>\n'
+            html_content += '<body>\n'
+            html_content += '    <style id="override-styles">\n'
+            html_content += '        /* 直接在body中添加样式覆盖，确保最高优先级 */\n'
+            html_content += '        .log-entry, \n'
+            html_content += '        .log-entry::before,\n'
+            html_content += '        .log-entry * {\n'
+            html_content += '            background-color: white !important;\n'
+            html_content += '            border-left: none !important;\n'
+            html_content += '            border-left-width: 0 !important;\n'
+            html_content += '            border-left-color: transparent !important;\n'
+            html_content += '        }\n'
+            html_content += '        .log-entry::before {\n'
+            html_content += '            content: none !important;\n'
+            html_content += '            display: none !important;\n'
+            html_content += '        }\n'
+            html_content += '        /* 移除所有绿色边框 */\n'
+            html_content += '        * {\n'
+            html_content += '            border-left-color: transparent !important;\n'
+            html_content += '        }\n'
+            html_content += '    </style>\n'
+            html_content += '    <header class="header">\n'
+            html_content += '        <h1>OpenManus</h1>\n'
+            html_content += '        <!-- 认证状态将由login.js动态添加 -->\n'
+            html_content += '    </header>\n\n'
+            html_content += '    <div class="main-container">\n'
+            html_content += '        <!-- 输入面板 -->\n'
+            html_content += '        <div class="input-panel">\n'
+            html_content += '            <h2 class="panel-header">任务设置</h2>\n'
+            html_content += '            <div class="input-container">\n'
+            html_content += '                <textarea id="prompt" placeholder="请输入您想要完成的任务描述..."></textarea>\n'
+            html_content += '                <button id="submit">执行任务</button>\n'
+            html_content += '                <div id="processing-indicator" class="processing-indicator">处理中，请稍候...</div>\n'
+            html_content += '            </div>\n'
+            html_content += '        </div>\n\n'
+            html_content += '        <!-- 日志/文件面板 -->\n'
+            html_content += '        <div class="log-panel">\n'
+            html_content += '            <div class="tab-container">\n'
+            html_content += '                <div class="tab active" data-target="logs-tab">执行日志</div>\n'
+            html_content += '                <div class="tab" data-target="files-tab">生成文件</div>\n'
+            html_content += '            </div>\n'
+            html_content += '            \n'
+            html_content += '            <!-- 日志内容 -->\n'
+            html_content += '            <div id="logs-tab" class="tab-content active">\n'
+            html_content += '                <div id="logs" class="logs-container markdown-body"></div>\n'
+            html_content += '            </div>\n'
+            html_content += '            \n'
+            html_content += '            <!-- 文件内容 -->\n'
+            html_content += '            <div id="files-tab" class="tab-content">\n'
+            html_content += '                <div id="files" class="files-container">\n'
+            html_content += '                    <div id="no-files-message" class="no-files-message">暂无生成文件</div>\n'
+            html_content += '                </div>\n'
+            html_content += '            </div>\n'
+            html_content += '        </div>\n'
+            html_content += '    </div>\n\n'
+            
+            # 添加JS脚本
+            for js_file in js_files:
+                html_content += f'    <script src="{js_file}?v={uuid.uuid4().hex[:8]}"></script>\n'
+            
+            html_content += '</body>\n'
+            html_content += '</html>\n'
+            
+            return HTMLResponse(content=html_content, headers=headers)
     
-    return Response(status_code=404) 
+    return Response(status_code=404)
+
+@app.get("/favicon.ico")
+@Web(auth_required=False)  # 不需要认证 - 网站图标公开访问
+async def favicon(request: Request):
+    """处理favicon请求"""
+    # 检查是否存在favicon文件
+    favicon_path = STATIC_DIR / "favicon.ico"
+    if favicon_path.exists():
+        return FileResponse(favicon_path)
+    else:
+        # 返回空响应
+        return Response(status_code=204)
+
+# 修改process端点，使用装饰器进行认证
+@app.post('/api/process')
+@Web()  # 默认需要认证
+async def process_prompt(request: Request):
+    """处理用户的提示，需要认证"""
+    form = await request.form()
+    prompt = form.get('prompt', '')
+    model = form.get('model', 'gpt-4')
+    
+    if not prompt:
+        return JSONResponse({'error': '请提供任务描述'}, status_code=400)
+    
+    # 从请求状态中获取用户信息（由认证装饰器添加）
+    user_info = getattr(request.state, "user", None)
+    
+    # 异步处理任务
+    asyncio.create_task(process_prompt_with_agent(prompt, model, user_info))
+    
+    return JSONResponse({'status': 'processing'}) 

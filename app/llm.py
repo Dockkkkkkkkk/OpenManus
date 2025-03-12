@@ -9,9 +9,10 @@ from openai import (
 )
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from app.config import LLMSettings, config
+from app.config import LLMSettings
 from app.logger import logger  # Assuming a logger is set up in your app
 from app.schema import Message
+from app.config import config
 
 
 class LLM:
@@ -31,13 +32,31 @@ class LLM:
     ):
         if not hasattr(self, "client"):  # Only initialize if not already initialized
             llm_config = llm_config or config.llm
-            llm_config = llm_config.get(config_name, llm_config["default"])
+            # 尝试获取特定配置，如果不存在则使用默认配置
+            try:
+                llm_config = llm_config.get(config_name, llm_config["default"])
+                # 打印实际使用的配置信息
+                safe_api_key = f"{llm_config.api_key[:5]}...{llm_config.api_key[-4:]}" if llm_config.api_key else "None"
+                print(f"[DEBUG] LLM初始化 - 配置名称: {config_name}, 模型: {llm_config.model}, API基础URL: {llm_config.base_url}, API密钥: {safe_api_key}")
+            except Exception as e:
+                print(f"[ERROR] 配置加载失败，使用默认配置: {str(e)}")
+                llm_config = llm_config["default"]
+                safe_api_key = f"{llm_config.api_key[:5]}...{llm_config.api_key[-4:]}" if llm_config.api_key else "None"
+                print(f"[DEBUG] 回退到默认配置 - 模型: {llm_config.model}, API基础URL: {llm_config.base_url}, API密钥: {safe_api_key}")
+            
             self.model = llm_config.model
             self.max_tokens = llm_config.max_tokens
             self.temperature = llm_config.temperature
-            self.client = AsyncOpenAI(
-                api_key=llm_config.api_key, base_url=llm_config.base_url
-            )
+            
+            # 创建OpenAI客户端
+            try:
+                print(f"[DEBUG] 创建OpenAI客户端 - 模型: {self.model}, API基础URL: {llm_config.base_url}")
+                self.client = AsyncOpenAI(
+                    api_key=llm_config.api_key, base_url=llm_config.base_url
+                )
+            except Exception as e:
+                print(f"[ERROR] OpenAI客户端创建失败: {str(e)}")
+                raise
 
     @staticmethod
     def format_messages(messages: List[Union[dict, Message]]) -> List[dict]:
