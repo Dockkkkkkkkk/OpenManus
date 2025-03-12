@@ -121,13 +121,14 @@ class TaskService:
                 return task
             return {}
             
-    async def get_user_tasks(self, user_id: str) -> List[Dict]:
-        """获取用户的所有任务"""
+    async def get_user_tasks(self, user_id: str, limit: int = 20, offset: int = 0) -> List[Dict]:
+        """获取用户的所有任务，支持分页"""
         try:
             tasks = []
             
             if not db_service.db_available:
                 # 如果数据库不可用，从内存中获取用户任务
+                memory_tasks = []
                 for task_id, task in self.in_memory_tasks.items():
                     if task.get("user_id") == user_id:
                         task_copy = task.copy()
@@ -139,39 +140,43 @@ class TaskService:
                             task_copy["files"] = self.in_memory_files[task_id]
                         else:
                             task_copy["files"] = []
-                        tasks.append(task_copy)
-                logger.debug(f"内存模式: 获取用户任务: 用户ID={user_id}, 任务数={len(tasks)}")
-                return tasks
+                        memory_tasks.append(task_copy)
                 
-            # 使用数据库服务获取用户任务
-            db_tasks = db_service.get_user_tasks(user_id)
+                # 手动处理分页
+                sorted_tasks = sorted(memory_tasks, key=lambda x: x.get("created_at", ""), reverse=True)
+                page_tasks = sorted_tasks[offset:offset + limit]
+                logger.debug(f"内存模式: 获取用户任务: 用户ID={user_id}, 任务数={len(page_tasks)}, 总数={len(sorted_tasks)}")
+                return page_tasks
+                
+            # 使用数据库服务获取用户任务，支持分页
+            db_tasks = db_service.get_user_tasks(user_id, limit, offset)
+            logger.info(f"从数据库获取用户任务: 用户ID={user_id}, 任务数={len(db_tasks)}")
             
             # 获取每个任务的详细信息
             for db_task in db_tasks:
                 task_id = db_task.get('id')
-                task = await self.get_task(task_id)
-                if task:
-                    tasks.append(task)
-                    
+                task = db_task.copy()
+                
+                # 添加文件信息
+                task['files'] = db_service.get_task_files(task_id)
+                
+                tasks.append(task)
+                
             return tasks
         except Exception as e:
-            logger.error(f"获取用户任务失败: {str(e)}")
-            # 尝试从内存中获取
-            tasks = []
+            logger.error(f"获取用户任务列表失败: {str(e)}")
+            # 使用内存存储作为备选
+            memory_tasks = []
             for task_id, task in self.in_memory_tasks.items():
                 if task.get("user_id") == user_id:
                     task_copy = task.copy()
-                    if task_id in self.in_memory_logs:
-                        task_copy["logs"] = self.in_memory_logs[task_id]
-                    else:
-                        task_copy["logs"] = ""
-                    if task_id in self.in_memory_files:
-                        task_copy["files"] = self.in_memory_files[task_id]
-                    else:
-                        task_copy["files"] = []
-                    tasks.append(task_copy)
-            logger.debug(f"内存模式(备选): 获取用户任务: 用户ID={user_id}, 任务数={len(tasks)}")
-            return tasks
+                    memory_tasks.append(task_copy)
+            
+            # 手动处理分页
+            sorted_tasks = sorted(memory_tasks, key=lambda x: x.get("created_at", ""), reverse=True)
+            page_tasks = sorted_tasks[offset:offset + limit]
+            logger.debug(f"内存模式(备选): 获取用户任务: 用户ID={user_id}, 任务数={len(page_tasks)}")
+            return page_tasks
     
     async def update_task_status(self, task_id: int, status: str, logs: Optional[str] = None) -> bool:
         """更新任务状态"""

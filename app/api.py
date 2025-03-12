@@ -44,12 +44,13 @@ except ImportError:
 
 app = FastAPI()
 
-# 注册认证路由
-app.include_router(auth_router)
-# 注册任务路由
-app.include_router(task_router)
+# 重排注册顺序 - 先注册通用页面路由，再注册认证路由，最后是任务路由
 # 注册页面路由
 app.include_router(pages_router)
+# 注册认证路由
+app.include_router(auth_router)
+# 注册任务路由 - 放在最后确保它有最高优先级
+app.include_router(task_router)
 
 # 添加CORS中间件
 app.add_middleware(
@@ -1211,10 +1212,58 @@ async def run_task(request: Request, prompt: str):
         headers=headers
     )
 
+@app.get("/tasks")
+@Web(auth_required=False)
+async def redirect_to_api_tasks(request: Request):
+    """将/tasks路径明确返回JSON格式的任务列表"""
+    # 直接调用task_service获取数据并返回JSONResponse
+    try:
+        # 从请求状态中获取用户信息
+        user_info = getattr(request.state, "user", None)
+        if not user_info:
+            return JSONResponse({"error": "需要登录", "message": "请登录后再访问此功能"})
+            
+        # 获取用户ID
+        user_id = user_info.get("user_id", "")
+        if not user_id:
+            return JSONResponse({"error": "无效的用户信息", "message": "无法获取用户ID"})
+            
+        # 使用任务服务获取任务列表
+        from app.services.task_service import task_service
+        tasks = await task_service.get_user_tasks(user_id, limit=20, offset=0)
+        
+        # 记录日志
+        print(f"从数据库获取到 {len(tasks)} 个任务，用户ID: {user_id}")
+        
+        # 导入datetime转换函数
+        from app.routes import convert_datetime_to_iso
+        
+        # 转换datetime对象为ISO格式字符串
+        serializable_tasks = convert_datetime_to_iso(tasks)
+        
+        # 使用json.dumps确保序列化成功
+        from json import dumps
+        json_data = dumps(serializable_tasks, ensure_ascii=False)
+        
+        # 明确返回JSONResponse，设置媒体类型确保正确处理中文
+        return Response(
+            content=json_data,
+            media_type="application/json; charset=utf-8"
+        )
+    except Exception as e:
+        import traceback
+        print(f"获取任务列表失败: {str(e)}")
+        print(traceback.format_exc())
+        return JSONResponse({"error": "获取任务失败", "message": str(e)})
+
 @app.get("/{full_path:path}")
 @Web(auth_required=False)  # 不需要认证 - 静态文件和前端页面公开访问
 async def serve_frontend(request: Request, full_path: str):
     """提供前端页面，作为默认路由返回静态index.html文件"""
+    # 排除API路径，避免覆盖特定API路由
+    if full_path == "tasks" or full_path.startswith("tasks/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+        
     headers = {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -1359,4 +1408,118 @@ async def process_prompt(request: Request):
     # 异步处理任务
     asyncio.create_task(process_prompt_with_agent(prompt, model, user_info))
     
-    return JSONResponse({'status': 'processing'}) 
+    return JSONResponse({'status': 'processing'})
+
+@app.get("/api/test")
+@Web(auth_required=False)
+async def test_api(request: Request):
+    """测试API端点"""
+    return {"status": "ok", "message": "API系统正常工作"}
+
+# 添加测试任务列表接口
+@app.get("/api/tasks/test")
+@Web(auth_required=False)
+async def test_tasks(request: Request):
+    """测试任务列表接口"""
+    return [
+        {"id": 1, "name": "测试任务1", "status": "completed", "created_at": "2023-01-01"},
+        {"id": 2, "name": "测试任务2", "status": "pending", "created_at": "2023-01-02"}
+    ]
+
+# 直接添加任务列表API而不通过router
+@app.get("/api/tasks-direct")
+@Web(auth_required=False)
+async def get_tasks_direct(request: Request):
+    """直接在app上定义的任务列表API"""
+    return [
+        {"id": 3, "name": "直接API任务1", "status": "completed", "created_at": "2023-01-03"},
+        {"id": 4, "name": "直接API任务2", "status": "pending", "created_at": "2023-01-04"}
+    ]
+
+# 保留一个下载文件函数，移除重复定义
+@app.get("/api/files/{file_id}/download")
+@Web(auth_required=False)  # 暂时不要求认证，方便测试
+async def download_file(request: Request, file_id: int):
+    """下载文件"""
+    # 这里应该从存储中获取文件并提供下载
+    # 现在返回一个简单的响应
+    return {"message": f"这里应该提供文件 {file_id} 的下载"}
+
+# 添加任务服务诊断端点
+@app.get("/api/debug/task-service")
+@Web(auth_required=False)
+async def debug_task_service(request: Request):
+    """诊断任务服务的状态"""
+    from app.services.task_service import task_service
+    try:
+        # 检查服务实例
+        service_info = {
+            "instance_exists": task_service is not None,
+            "type": str(type(task_service)),
+        }
+        
+        # 检查数据库连接
+        db_info = {
+            "db_available": getattr(task_service, "db_available", False),
+        }
+        
+        # 尝试简单操作
+        try:
+            tasks = await task_service.get_user_tasks("test_user", 5, 0)
+            operation_info = {
+                "get_tasks_success": True,
+                "tasks_count": len(tasks) if tasks else 0,
+                "tasks": tasks
+            }
+        except Exception as e:
+            operation_info = {
+                "get_tasks_success": False,
+                "error": str(e)
+            }
+            
+        return {
+            "service": service_info,
+            "database": db_info,
+            "operation": operation_info
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+# 添加一个调试端点来显示所有注册的路由
+@app.get("/api/debug/routes")
+@Web(auth_required=False)
+async def debug_routes(request: Request):
+    """显示所有注册的路由信息"""
+    routes = []
+    for route in app.routes:
+        route_info = {
+            "path": getattr(route, "path", str(route)),
+            "name": getattr(route, "name", None),
+            "endpoint": getattr(route, "endpoint", None).__name__ if hasattr(getattr(route, "endpoint", None), "__name__") else str(getattr(route, "endpoint", None)),
+            "methods": list(getattr(route, "methods", [])) if hasattr(route, "methods") else None,
+        }
+        routes.append(route_info)
+    
+    # 尝试获取task_router的路由信息
+    task_routes = []
+    try:
+        for route in task_router.routes:
+            route_info = {
+                "path": getattr(route, "path", str(route)),
+                "name": getattr(route, "name", None),
+                "endpoint": getattr(route, "endpoint", None).__name__ if hasattr(getattr(route, "endpoint", None), "__name__") else str(getattr(route, "endpoint", None)),
+                "methods": list(getattr(route, "methods", [])) if hasattr(route, "methods") else None
+            }
+            task_routes.append(route_info)
+    except Exception as e:
+        task_routes = [{"error": str(e)}]
+    
+    # 返回所有路由信息
+    return {
+        "all_routes": routes,
+        "task_router_routes": task_routes,
+        "task_router_prefix": getattr(task_router, "prefix", None)
+    } 

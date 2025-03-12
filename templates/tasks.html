@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务管理 - OpenManus</title>
+    <style>
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 15px 0;
+            margin-bottom: 20px;
+        }
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+        }
+        .page-title {
+            margin: 0;
+            padding: 0;
+            font-size: 1.8rem;
+            color: #333;
+        }
+        .back-link {
+            color: #3498db;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .task-list {
+            background-color: #fff;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .task-header {
+            display: grid;
+            grid-template-columns: 80px 1fr 180px 120px 120px;
+            padding: 15px 20px;
+            background-color: #f8f9fa;
+            border-bottom: 1px solid #eee;
+            font-weight: bold;
+        }
+        .task-item {
+            display: grid;
+            grid-template-columns: 80px 1fr 180px 120px 120px;
+            padding: 15px 20px;
+            border-bottom: 1px solid #eee;
+            transition: background-color 0.2s;
+        }
+        .task-item:hover {
+            background-color: #f8f9fa;
+        }
+        .task-id {
+            font-weight: bold;
+            color: #666;
+        }
+        .task-name {
+            font-weight: bold;
+        }
+        .task-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            text-align: center;
+            display: inline-block;
+        }
+        .status-pending {
+            background-color: #f8f9fa;
+            color: #7f8c8d;
+        }
+        .status-running {
+            background-color: #e1f5fe;
+            color: #0288d1;
+        }
+        .status-completed {
+            background-color: #e8f5e9;
+            color: #388e3c;
+        }
+        .status-failed {
+            background-color: #ffebee;
+            color: #d32f2f;
+        }
+        .task-action {
+            text-align: center;
+        }
+        .view-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 0.9rem;
+        }
+        .view-btn:hover {
+            background-color: #2980b9;
+        }
+        .empty-list {
+            padding: 40px 20px;
+            text-align: center;
+            color: #7f8c8d;
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+            flex-direction: column;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #3498db;
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1 class="page-title">任务管理</h1>
+            <a href="/" class="back-link">返回首页</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div id="task-loading" class="loading">
+            <div class="spinner"></div>
+            <p>正在加载任务列表...</p>
+        </div>
+        
+        <div id="task-list" class="task-list" style="display: none;">
+            <div class="task-header">
+                <div>任务ID</div>
+                <div>任务名称</div>
+                <div>创建时间</div>
+                <div>状态</div>
+                <div>操作</div>
+            </div>
+            <div id="task-items">
+                <!-- 任务列表将通过JavaScript动态加载 -->
+            </div>
+        </div>
+        
+        <div id="empty-list" class="empty-list" style="display: none;">
+            <p>暂无任务记录</p>
+        </div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const loading = document.getElementById('task-loading');
+            const taskList = document.getElementById('task-list');
+            const taskItems = document.getElementById('task-items');
+            const emptyList = document.getElementById('empty-list');
+            
+            // 获取用户信息
+            const userId = '{{ request.state.user.id }}' || '{{ request.state.user.user_id }}';
+            const username = '{{ request.state.user.username }}';
+            
+            console.log('当前用户:', username, '用户ID:', userId);
+            
+            // 加载任务列表
+            fetch('/api/tasks')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('加载任务失败: ' + response.status);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    loading.style.display = 'none';
+                    
+                    if (data && data.length > 0) {
+                        // 显示任务列表
+                        taskList.style.display = 'block';
+                        
+                        // 清空现有任务项
+                        taskItems.innerHTML = '';
+                        
+                        // 添加新任务项
+                        data.forEach(task => {
+                            const taskElement = document.createElement('div');
+                            taskElement.className = 'task-item';
+                            
+                            // 格式化创建时间
+                            const createdDate = new Date(task.created_at);
+                            const formattedDate = createdDate.toLocaleString('zh-CN', {
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                            });
+                            
+                            // 获取状态样式类
+                            const statusClass = `status-${task.status.toLowerCase()}`;
+                            
+                            // 设置任务元素的内容
+                            taskElement.innerHTML = `
+                                <div class="task-id">${task.id}</div>
+                                <div class="task-name">${task.name || '未命名任务'}</div>
+                                <div>${formattedDate}</div>
+                                <div><span class="task-status ${statusClass}">${getStatusText(task.status)}</span></div>
+                                <div class="task-action">
+                                    <a href="/tasks/${task.id}" class="view-btn">查看详情</a>
+                                </div>
+                            `;
+                            
+                            // 添加到任务列表容器
+                            taskItems.appendChild(taskElement);
+                        });
+                    } else {
+                        // 显示空列表消息
+                        emptyList.style.display = 'block';
+                    }
+                })
+                .catch(error => {
+                    console.error('获取任务列表失败:', error);
+                    loading.innerHTML = `
+                        <div style="color: #d32f2f;">
+                            <p>加载任务失败</p>
+                            <p>错误信息: ${error.message}</p>
+                        </div>
+                    `;
+                });
+            
+            // 将状态代码转换为可读文本
+            function getStatusText(status) {
+                switch (status.toLowerCase()) {
+                    case 'pending': return '等待中';
+                    case 'running': return '处理中';
+                    case 'completed': return '已完成';
+                    case 'failed': return '失败';
+                    default: return status;
+                }
+            }
+        });
+    </script>
+</body>
+</html> 

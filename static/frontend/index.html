@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenManus AI助手</title>
+    <title>OpenManus - AI辅助代码生成工具</title>
     <style>
         body { 
             font-family: sans-serif; 
@@ -239,9 +239,89 @@
             color: #795548;
             display: none;
         }
+        /* 添加导航栏样式 */
+        .navbar {
+            display: flex;
+            background-color: #2c3e50;
+            padding: 12px 20px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .navbar a {
+            color: white;
+            padding: 10px 18px;
+            text-decoration: none;
+            margin-right: 15px;
+            border-radius: 4px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+        
+        .navbar a:hover {
+            background-color: #3498db;
+            transform: translateY(-2px);
+        }
+        
+        .navbar a.active {
+            background-color: #3498db;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .summary-content {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #4a6bdf;
+            margin-top: 20px;
+        }
+        .results-status, .summary-status {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            text-align: center;
+            margin-top: 20px;
+        }
+        #results-container, #summary-container {
+            margin-top: 20px;
+        }
+        /* 添加任务管理区域样式 */
+        .tasks-redirect {
+            text-align: center;
+            padding: 40px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        
+        .tasks-redirect h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        
+        .tasks-redirect p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        
+        .tasks-redirect .spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
     </style>
 </head>
 <body>
+    <!-- 添加导航栏 -->
+    <div class="navbar">
+        <a href="/" class="active">首页</a>
+        <a href="/tasks">任务管理</a>
+    </div>
+
     <h1>OpenManus AI助手</h1>
     <div class="app-container">
         <div class="input-panel">
@@ -253,6 +333,7 @@
         <div class="log-panel">
             <div class="tab-container">
                 <div class="tab active" data-tab="logs">系统日志</div>
+                <div class="tab" data-tab="tasks">任务管理</div>
                 <div class="tab" data-tab="results">任务结果</div>
             </div>
             
@@ -261,30 +342,24 @@
                 <div id="logs"></div>
             </div>
             
+            <!-- 任务管理区域 -->
+            <div id="tasks-container" style="display:none;">
+                <div class="tasks-redirect">
+                    <h3>任务管理</h3>
+                    <p>正在跳转到任务管理页面...</p>
+                    <div class="spinner" style="margin: 20px auto;"></div>
+                </div>
+            </div>
+            
             <!-- 任务结果区域 -->
-            <div id="results-container" style="display:none; flex: 1; display: flex; flex-direction: column;">
-                <!-- 结果状态 -->
-                <div class="results-status" id="results-status"></div>
+            <div id="results-wrapper" style="display:none; flex-direction: column;">
+                <!-- 文件列表容器 -->
+                <h3>生成的文件</h3>
+                <div id="results-container"></div>
                 
-                <!-- 文件列表 -->
-                <div class="result-section" id="file-section">
-                    <h3>生成的文件</h3>
-                    <div class="file-list" id="file-list">
-                        <!-- 文件列表将在这里动态生成 -->
-                    </div>
-                </div>
-                
-                <!-- 任务总结加载状态 -->
-                <div class="summary-loading" id="summary-loading" style="display: none;">
-                    <div class="spinner"></div>
-                    <div class="summary-loading-text">正在生成任务摘要...</div>
-                </div>
-                
-                <!-- 任务总结 -->
-                <div class="summary-section" id="summary-section">
-                    <h3>任务总结</h3>
-                    <div id="task-summary" class="formatted-text"></div>
-                </div>
+                <!-- 摘要容器 -->
+                <h3>任务摘要</h3>
+                <div id="summary-container"></div>
             </div>
         </div>
     </div>
@@ -305,22 +380,39 @@
         const logsContainer = document.getElementById('logs-container');
         const resultsContainer = document.getElementById('results-container');
         
-        // 切换标签页
+        // 标签页切换功能
         tabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                // 移除所有标签页的活动状态
+                const tabId = tab.getAttribute('data-tab');
+                
+                // 更新标签状态
                 tabs.forEach(t => t.classList.remove('active'));
-                // 添加当前标签页的活动状态
                 tab.classList.add('active');
                 
-                // 显示对应的内容区域
-                const tabName = tab.getAttribute('data-tab');
-                if (tabName === 'logs') {
+                // 切换内容显示
+                const logsContainer = document.getElementById('logs-container');
+                const tasksContainer = document.getElementById('tasks-container');
+                const resultsWrapper = document.getElementById('results-wrapper');
+                
+                if (tabId === 'logs') {
                     logsContainer.style.display = 'block';
-                    resultsContainer.style.display = 'none';
-                } else {
+                    tasksContainer.style.display = 'none';
+                    resultsWrapper.style.display = 'none';
+                } else if (tabId === 'tasks') {
+                    // 点击任务管理标签时，跳转到任务管理页面
                     logsContainer.style.display = 'none';
-                    resultsContainer.style.display = 'flex';
+                    tasksContainer.style.display = 'block';
+                    resultsWrapper.style.display = 'none';
+                    
+                    // 显示重定向提示1秒后跳转
+                    setTimeout(() => {
+                        window.location.href = '/tasks';
+                    }, 1000);
+                } else {
+                    // 结果标签
+                    logsContainer.style.display = 'none';
+                    tasksContainer.style.display = 'none';
+                    resultsWrapper.style.display = 'flex';
                     
                     // 切换到结果标签时获取最新的文件列表和总结
                     fetchGeneratedFiles();
@@ -330,9 +422,15 @@
         
         // 获取生成的文件列表
         async function fetchGeneratedFiles() {
+            const resultsContainer = document.getElementById('results-container');
+            const summaryContainer = document.getElementById('summary-container');
+            
+            // 显示加载状态
+            resultsContainer.innerHTML = '<div class="results-status"><span class="loading"></span> 正在加载生成的文件...</div>';
+            summaryContainer.innerHTML = '<div class="summary-loading"><span class="loading"></span> 正在生成摘要...</div>';
+            
             try {
                 const response = await fetch('/api/files');
-                
                 if (!response.ok) {
                     throw new Error('获取文件列表失败');
                 }
@@ -341,160 +439,100 @@
                 
                 // 处理文件列表
                 if (data.files && data.files.length > 0) {
-                    renderFileList(data.files);
-                    fileSection.style.display = 'block';
+                    renderFileList(data.files, resultsContainer);
                 } else {
-                    fileSection.style.display = 'none';
+                    resultsContainer.innerHTML = '<div class="results-status">暂无生成的文件</div>';
                 }
                 
-                // 处理摘要生成状态
+                // 处理摘要状态
                 if (data.summary_status && data.summary_status.in_progress) {
-                    // 显示加载状态
-                    summaryLoading.style.display = 'flex';
-                    summarySection.style.display = 'none';
-                    
-                    // 显示状态消息
-                    const loadingText = document.querySelector('.summary-loading-text');
-                    if (loadingText) {
-                        loadingText.textContent = data.summary_status.message || '正在生成任务摘要...';
-                    }
-                    
-                    // 定时刷新状态
-                    setTimeout(fetchGeneratedFiles, 2000);
+                    // 如果摘要正在生成中，保持加载状态
+                    summaryContainer.innerHTML = '<div class="summary-loading"><span class="loading"></span> 正在生成摘要...</div>';
+                } else if (data.summary) {
+                    // 显示生成好的摘要
+                    summaryContainer.innerHTML = `<div class="summary-content formatted-text">${formatText(data.summary)}</div>`;
                 } else {
-                    // 隐藏加载状态
-                    summaryLoading.style.display = 'none';
-                    
-                    // 处理任务总结
-                    if (data.summary && data.summary.trim()) {
-                        taskSummary.innerHTML = formatText(data.summary);
-                        summarySection.style.display = 'block';
-                    } else {
-                        summarySection.style.display = 'none';
-                    }
+                    summaryContainer.innerHTML = '<div class="summary-status">暂无任务摘要</div>';
                 }
-                
-                // 如果有任何状态消息要显示
-                if (data.summary_status && data.summary_status.message) {
-                    resultsStatus.textContent = data.summary_status.message;
-                    resultsStatus.style.display = 'block';
-                } else {
-                    resultsStatus.style.display = 'none';
-                }
-                
             } catch (error) {
                 console.error('获取文件列表失败:', error);
-                resultsStatus.textContent = `获取任务结果失败: ${error.message}`;
-                resultsStatus.style.display = 'block';
+                resultsContainer.innerHTML = `<div class="results-status error">加载文件列表失败: ${error.message}</div>`;
+                summaryContainer.innerHTML = `<div class="summary-status error">加载摘要失败: ${error.message}</div>`;
             }
         }
         
         // 渲染文件列表
-        function renderFileList(files) {
-            fileList.innerHTML = '';
+        function renderFileList(files, container) {
+            // 创建文件列表容器
+            container.innerHTML = '';
+            const fileListElement = document.createElement('div');
+            fileListElement.className = 'file-list';
             
             files.forEach(file => {
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-item';
                 
+                // 创建文件信息区域
+                const fileInfo = document.createElement('div');
+                fileInfo.className = 'file-info';
+                
+                // 文件名显示
+                const fileName = document.createElement('div');
+                fileName.className = 'file-name';
+                fileName.textContent = file.name || file.filename;
+                fileInfo.appendChild(fileName);
+                
+                // 文件元数据显示
+                const fileMeta = document.createElement('div');
+                fileMeta.className = 'file-meta';
+                
                 // 格式化文件大小
-                const fileSize = formatFileSize(file.size);
+                let sizeText = '';
+                if (file.size) {
+                    const size = parseInt(file.size);
+                    if (size < 1024) {
+                        sizeText = `${size} 字节`;
+                    } else if (size < 1024 * 1024) {
+                        sizeText = `${(size / 1024).toFixed(2)} KB`;
+                    } else {
+                        sizeText = `${(size / (1024 * 1024)).toFixed(2)} MB`;
+                    }
+                }
                 
                 // 格式化创建时间
-                const createDate = new Date(file.created * 1000).toLocaleString();
-                
-                fileItem.innerHTML = `
-                    <div class="file-info">
-                        <div class="file-name">${file.name}</div>
-                        <div class="file-meta">${fileSize} · 创建于 ${createDate}</div>
-                    </div>
-                    <button class="file-download" data-filename="${file.name}">下载</button>
-                `;
-                
-                fileList.appendChild(fileItem);
-            });
-            
-            // 添加下载按钮事件
-            document.querySelectorAll('.file-download').forEach(button => {
-                button.addEventListener('click', () => {
-                    const fileName = button.getAttribute('data-filename');
-                    downloadFile(fileName);
-                });
-            });
-        }
-        
-        // 下载文件
-        function downloadFile(fileName) {
-            window.open(`/api/download/${fileName}`, '_blank');
-        }
-        
-        // 格式化文件大小
-        function formatFileSize(bytes) {
-            if (bytes < 1024) {
-                return bytes + ' B';
-            } else if (bytes < 1024 * 1024) {
-                return (bytes / 1024).toFixed(2) + ' KB';
-            } else if (bytes < 1024 * 1024 * 1024) {
-                return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-            } else {
-                return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-            }
-        }
-        
-        // 简单的文本格式化，只处理简单的代码块
-        function formatText(text) {
-            if (!text) return '';
-            
-            // 转义HTML以避免XSS攻击
-            text = text.replace(/&/g, '&amp;')
-                       .replace(/</g, '&lt;')
-                       .replace(/>/g, '&gt;');
-            
-            // 替换连续的空格为保留格式的空格
-            text = text.replace(/ {2}/g, ' &nbsp;');
-            
-            // 处理代码块
-            text = text.replace(/```([\s\S]*?)```/g, function(match, code) {
-                return '<pre>' + code + '</pre>';
-            });
-            
-            // 处理内联代码
-            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-            
-            // 处理标题
-            text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
-            text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
-            text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-            
-            // 处理粗体
-            text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            
-            // 处理斜体
-            text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
-            
-            // 处理无序列表
-            text = text.replace(/^\s*[\-\*]\s+(.*$)/gm, '<li>$1</li>');
-            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ul><ul>');
-            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ul>$1</ul>');
-            
-            // 处理有序列表
-            text = text.replace(/^\s*(\d+)\.\s+(.*$)/gm, '<li>$2</li>');
-            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ol><ol>');
-            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ol>$1</ol>');
-            
-            // 处理链接
-            text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-            
-            // 处理段落
-            let paragraphs = text.split(/\n\s*\n/);
-            for (let i = 0; i < paragraphs.length; i++) {
-                if (!paragraphs[i].trim().startsWith('<')) {
-                    paragraphs[i] = '<p>' + paragraphs[i] + '</p>';
+                let timeText = '';
+                if (file.created_at) {
+                    const date = new Date(file.created_at);
+                    timeText = date.toLocaleString('zh-CN');
                 }
-            }
-            text = paragraphs.join('\n\n');
+                
+                fileMeta.textContent = [
+                    file.path ? `路径: ${file.path}` : '',
+                    sizeText ? `大小: ${sizeText}` : '',
+                    timeText ? `创建时间: ${timeText}` : ''
+                ].filter(Boolean).join(' | ');
+                
+                if (fileMeta.textContent) {
+                    fileInfo.appendChild(fileMeta);
+                }
+                
+                fileItem.appendChild(fileInfo);
+                
+                // 创建下载按钮
+                const downloadButton = document.createElement('button');
+                downloadButton.className = 'file-download';
+                downloadButton.textContent = '下载';
+                downloadButton.addEventListener('click', () => {
+                    const downloadUrl = file.download_url || `/api/download/${encodeURIComponent(file.name || file.filename)}`;
+                    window.open(downloadUrl, '_blank');
+                });
+                fileItem.appendChild(downloadButton);
+                
+                // 添加到文件列表
+                fileListElement.appendChild(fileItem);
+            });
             
-            return text;
+            container.appendChild(fileListElement);
         }
         
         // 状态变量
@@ -529,12 +567,40 @@
                     const userMessage = data.content.substring(3).trim();
                     addMessage(userMessage, 'user');
                 } else if (data.content.includes('处理完成')) {
-                    // 如果收到处理完成的消息，恢复输入状态
+                    // 如果收到处理完成的消息
+                    console.log('接收到处理完成消息，准备切换到结果标签页');
+                    
+                    // 先更新状态
                     updateStatus(false, '任务已完成');
+                    
+                    // 自动切换到结果标签 - 这里要确保立即执行
+                    const resultsTab = document.querySelector('.tab[data-tab="results"]');
+                    if (resultsTab) {
+                        console.log('找到结果标签，执行点击事件');
+                        resultsTab.click();
+                        
+                        // 确保结果容器可见
+                        const resultsWrapper = document.getElementById('results-wrapper');
+                        if (resultsWrapper) {
+                            resultsWrapper.style.display = 'flex';
+                        }
+                        
+                        // 隐藏日志容器
+                        const logsContainer = document.getElementById('logs-container');
+                        if (logsContainer) {
+                            logsContainer.style.display = 'none';
+                        }
+                    }
+                    
+                    // 显示加载状态
+                    document.getElementById('results-container').innerHTML = 
+                        '<div class="results-status"><span class="loading"></span> 正在加载生成的文件...</div>';
+                    document.getElementById('summary-container').innerHTML = 
+                        '<div class="summary-loading"><span class="loading"></span> 正在生成摘要...</div>';
+                    
                     // 获取生成的文件列表
                     fetchGeneratedFiles();
-                    // 自动切换到结果标签
-                    document.querySelector('.tab[data-tab="results"]').click();
+                    
                     // 每隔2秒检查一次摘要生成状态
                     const checkInterval = setInterval(() => {
                         fetch('/api/files')
@@ -550,6 +616,7 @@
                                 clearInterval(checkInterval);
                             });
                     }, 2000);
+                    
                     setTimeout(() => updateStatus(false, ''), 3000);
                 } else {
                     // 使用简单格式化
@@ -647,6 +714,62 @@
         window.addEventListener('load', () => {
             promptInput.focus();
         });
+
+        // 简单的文本格式化，只处理简单的代码块
+        function formatText(text) {
+            if (!text) return '';
+            
+            // 转义HTML以避免XSS攻击
+            text = text.replace(/&/g, '&amp;')
+                       .replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;');
+            
+            // 替换连续的空格为保留格式的空格
+            text = text.replace(/ {2}/g, ' &nbsp;');
+            
+            // 处理代码块
+            text = text.replace(/```([\s\S]*?)```/g, function(match, code) {
+                return '<pre>' + code + '</pre>';
+            });
+            
+            // 处理内联代码
+            text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // 处理标题
+            text = text.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+            text = text.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+            text = text.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+            
+            // 处理粗体
+            text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            
+            // 处理斜体
+            text = text.replace(/\*(.*?)\*/g, '<em>$1</em>');
+            
+            // 处理无序列表
+            text = text.replace(/^\s*[\-\*]\s+(.*$)/gm, '<li>$1</li>');
+            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ul><ul>');
+            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ul>$1</ul>');
+            
+            // 处理有序列表
+            text = text.replace(/^\s*(\d+)\.\s+(.*$)/gm, '<li>$2</li>');
+            text = text.replace(/(<li>.*<\/li>)\s+(?=<li>)/g, '$1</ol><ol>');
+            text = text.replace(/(?:^|\n)(<li>.*<\/li>)(?:\n|$)/g, '<ol>$1</ol>');
+            
+            // 处理链接
+            text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+            
+            // 处理段落
+            let paragraphs = text.split(/\n\s*\n/);
+            for (let i = 0; i < paragraphs.length; i++) {
+                if (!paragraphs[i].trim().startsWith('<')) {
+                    paragraphs[i] = '<p>' + paragraphs[i] + '</p>';
+                }
+            }
+            text = paragraphs.join('\n\n');
+            
+            return text;
+        }
     </script>
 </body>
 </html>

@@ -432,7 +432,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('task-list-loading').style.display = 'flex';
                 
                 // 使用认证请求获取任务列表
-                const response = await window.Auth.fetchWithAuth('/api/tasks/');
+                const response = await window.Auth.fetchWithAuth('/tasks/');
                 
                 // 如果认证进行中，不进行后续处理
                 if (response._auth_in_progress) {

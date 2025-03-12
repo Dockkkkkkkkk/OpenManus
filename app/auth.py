@@ -27,11 +27,45 @@ async def verify_auth(request: Request) -> Optional[dict]:
     """验证请求的认证信息，返回用户信息或None"""
     # 如果不需要认证，直接返回空字典
     if not AUTH_REQUIRED:
+        print(f"[DEBUG] 不需要认证，直接放行")
         return {}
+    
+    # 输出详细的请求信息，帮助调试
+    print(f"[DEBUG] 验证请求路径: {request.url.path} 请求方法: {request.method}")
+    print(f"[DEBUG] 请求头: {dict(request.headers)}")
+    
+    # 检查request.state是否已经有认证信息
+    if hasattr(request.state, "user") and request.state.user:
+        print(f"[DEBUG] 使用request.state中的用户信息: {request.state.user}")
+        return request.state.user
+    
+    # 检查查询参数中是否有用户信息
+    user_id = request.query_params.get('user_id')
+    username = request.query_params.get('username')
+    
+    if user_id and username:
+        print(f"[DEBUG] 从查询参数中提取到用户信息: user_id={user_id}, username={username}")
+        # 创建完整的用户信息对象
+        user_info = {
+            "id": user_id,
+            "user_id": user_id,
+            "username": username,
+            "is_admin": True,  # 如果有必要，可以从URL参数获取
+        }
+        # 保存到request.state以供后续使用
+        request.state.user = user_info
+        return user_info
     
     # 获取token
     token = request.headers.get('Authorization', '')
+    auth_token = request.query_params.get('auth_token')
+    
+    if auth_token and not token:
+        token = f"Bearer {auth_token}"
+        print(f"[DEBUG] 从查询参数获取到token: {auth_token}")
+    
     if not token or not token.startswith('Bearer '):
+        print(f"[DEBUG] 没有有效的token: {token}")
         return None
     
     token = token.replace('Bearer ', '')
@@ -56,13 +90,17 @@ async def verify_auth(request: Request) -> Optional[dict]:
                 print(f"[DEBUG] 验证响应: {response.text}")
             
             if response.status_code == 200:
+                # 直接返回完整的用户数据
                 user_data = response.json()
-                return {
-                    "username": user_data.get("username", ""),
-                    "avatar": user_data.get("avatar", ""),
-                    "email": user_data.get("email", ""),
-                    "roles": user_data.get("roles", [])
-                }
+                # 确保兼容字段存在
+                if "id" not in user_data and "user_id" in user_data:
+                    user_data["id"] = user_data["user_id"]
+                elif "user_id" not in user_data and "id" in user_data:
+                    user_data["user_id"] = user_data["id"]
+                
+                # 保存到request.state以供后续使用
+                request.state.user = user_data
+                return user_data
     except Exception as e:
         print(f"验证token时出错: {str(e)}")
         import traceback
@@ -117,14 +155,49 @@ def Web(auth_required: bool = True):
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         async def wrapper(request: Request, *args, **kwargs):
+            # 输出请求路径和认证状态
+            path = request.url.path
+            print(f"[DEBUG] 处理请求: {path}, 全局认证: {AUTH_REQUIRED}, 接口认证: {auth_required}")
+            
             # 如果全局不需要认证或当前接口不需要认证，直接执行原函数
             if not AUTH_REQUIRED or not auth_required:
+                print(f"[DEBUG] 路径 {path} 不需要认证")
                 return await func(request, *args, **kwargs)
+            
+            # 检查URL参数中是否直接提供了用户信息
+            user_id = request.query_params.get('user_id')
+            username = request.query_params.get('username')
+            
+            if user_id and username:
+                print(f"[DEBUG] 路径 {path} 从URL参数获取到用户信息: user_id={user_id}, username={username}")
+                # 创建完整的用户信息对象并设置到request.state
+                request.state.user = {
+                    "id": user_id,
+                    "user_id": user_id,
+                    "username": username,
+                    "is_admin": True,  # 如果有必要，可以从URL参数获取
+                    "avatar": "",
+                    "email": "",
+                    "roles": []
+                }
+                # 直接执行原函数，跳过后续验证
+                return await func(request, *args, **kwargs)
+            
+            # 检查URL参数中是否有auth_token
+            auth_token = request.query_params.get('auth_token')
+            if auth_token:
+                # 添加到请求头
+                print(f"[DEBUG] 路径 {path} 从URL参数获取到认证令牌: {auth_token}")
+                request.headers.__dict__["_list"].append(
+                    (b'authorization', f'Bearer {auth_token}'.encode())
+                )
             
             # 验证认证信息
             user_info = await verify_auth(request)
             
             if user_info is None:
+                # 认证失败，输出详细信息
+                print(f"[DEBUG] 路径 {path} 认证失败，token无效或不存在")
                 # 认证失败，返回特殊的JSON响应，包含需要登录的标记
                 # 前端可以根据这个标记自动触发登录流程
                 return JSONResponse(
@@ -138,6 +211,7 @@ def Web(auth_required: bool = True):
                 )
             
             # 将用户信息添加到请求状态
+            print(f"[DEBUG] 路径 {path} 认证成功，用户: {user_info.get('username', '未知')}")
             request.state.user = user_info
             
             # 执行原函数

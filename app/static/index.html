@@ -11,6 +11,433 @@
     <link rel="stylesheet" href="/static/css/styles.css">
     <link rel="stylesheet" href="/static/css/login.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown.min.css">
+    <style>
+        /* 导航菜单样式 */
+        .nav-links {
+            display: flex;
+            margin-left: 30px;
+        }
+        
+        .nav-item {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            margin-right: 10px;
+            border-radius: 4px;
+            background-color: rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        .nav-item:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .nav-item.active {
+            background-color: #3498db;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        /* 确保header可以容纳导航菜单 */
+        .header {
+            display: flex;
+            align-items: center;
+            padding: 15px 20px;
+        }
+        
+        /* 任务管理跳转样式 */
+        .tasks-redirect {
+            text-align: center;
+            padding: 40px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            margin: 20px;
+        }
+        
+        .tasks-redirect h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .tasks-redirect p {
+            margin-bottom: 20px;
+            color: #666;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* 任务管理按钮样式 */
+        .task-btn {
+            padding: 10px 20px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 15px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        
+        .task-btn:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        .task-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 3px rgba(0,0,0,0.1);
+        }
+        
+        /* iframe容器样式 */
+        .tasks-iframe-container {
+            position: relative;
+            width: 100%;
+            height: 600px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        .tasks-loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: #f5f5f5;
+            z-index: 2;
+        }
+        
+        /* 任务列表样式 */
+        .tasks-container {
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        
+        .tasks-list {
+            margin-top: 15px;
+            display: table;
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 8px;
+        }
+        
+        .task-header-row {
+            display: table-row;
+        }
+        
+        .task-header-cell {
+            display: table-cell;
+            padding: 8px;
+            font-weight: bold;
+            color: #444;
+            border-bottom: 2px solid #ddd;
+        }
+        
+        .task-item {
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            transition: all 0.2s ease;
+            display: table-row;
+        }
+        
+        .task-item:hover {
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            background-color: #f1f3f5;
+        }
+        
+        .task-item > div {
+            display: table-cell;
+            padding: 10px 8px;
+            vertical-align: middle;
+            border-bottom: 1px solid #eee;
+        }
+        
+        /* 调整各列宽度 */
+        .task-id, .task-header-cell:first-child {
+            font-weight: 500;
+            color: #555;
+            width: 60px;
+            text-align: center;
+        }
+        
+        .task-date, .task-header-cell:nth-child(2) {
+            color: #777;
+            width: 100px;
+        }
+        
+        .task-status-container, .task-header-cell:nth-child(3) {
+            width: 80px;
+            text-align: center;
+        }
+        
+        .task-status {
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+            width: 80px;
+            text-align: center;
+            display: inline-block;
+        }
+        
+        .status-pending {
+            background-color: #e2f3f5;
+            color: #0e7c86;
+        }
+        
+        .status-running {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-completed {
+            background-color: #d1e7dd;
+            color: #0f5132;
+        }
+        
+        .status-failed {
+            background-color: #f8d7da;
+            color: #842029;
+        }
+        
+        .task-prompt {
+            color: #333;
+            padding: 8px;
+            flex-grow: 1;
+            max-width: 300px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            border-left: none;
+            background-color: transparent;
+            margin-bottom: 0;
+        }
+        
+        .task-actions {
+            width: 100px;
+            text-align: center;
+        }
+        
+        .view-details {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 5px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            font-size: 0.85rem;
+            white-space: nowrap;
+        }
+        
+        .view-details:hover {
+            background-color: #2980b9;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6c757d;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 10px;
+        }
+        
+        .error-message {
+            text-align: center;
+            padding: 30px 20px;
+            background-color: #f8d7da;
+            color: #721c24;
+            border-radius: 5px;
+        }
+        
+        .error-message h3 {
+            margin-bottom: 10px;
+        }
+        
+        .retry-btn, .back-btn {
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+            cursor: pointer;
+        }
+        
+        .retry-btn:hover, .back-btn:hover {
+            background-color: #5a6268;
+        }
+        
+        /* 任务详情样式 */
+        .task-detail {
+            padding: 20px;
+            background-color: #fff;
+        }
+        
+        .task-detail-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .task-detail-header h2 {
+            margin-left: 15px;
+        }
+        
+        .task-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .task-info-row {
+            display: flex;
+            margin-bottom: 8px;
+        }
+        
+        .task-info-label {
+            width: 100px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .task-prompt-section, 
+        .task-files-section, 
+        .task-logs-section {
+            margin-bottom: 25px;
+        }
+        
+        .task-prompt-section h3, 
+        .task-files-section h3, 
+        .task-logs-section h3 {
+            margin-bottom: 10px;
+            color: #333;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+        
+        .task-files-list, 
+        .task-logs-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #fff;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        
+        .file-name {
+            font-weight: 500;
+        }
+        
+        .file-meta {
+            color: #6c757d;
+            font-size: 0.85rem;
+        }
+        
+        .download-btn {
+            background-color: #28a745;
+            color: white;
+            text-decoration: none;
+            padding: 6px 10px;
+            border-radius: 3px;
+            font-size: 0.9rem;
+        }
+        
+        .download-btn:hover {
+            background-color: #218838;
+        }
+        
+        .log-item {
+            padding: 8px 10px;
+            border-radius: 3px;
+            margin-bottom: 5px;
+            display: flex;
+        }
+        
+        .log-info {
+            background-color: #e9f5fd;
+        }
+        
+        .log-warning {
+            background-color: #fff3cd;
+        }
+        
+        .log-error {
+            background-color: #f8d7da;
+        }
+        
+        .log-time {
+            width: 140px;
+            color: #6c757d;
+            font-size: 0.85rem;
+        }
+        
+        .log-message {
+            flex: 1;
+        }
+        
+        .tasks-unauthorized {
+            text-align: center;
+            padding: 40px 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        
+        .login-btn {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            margin-top: 15px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+        
+        .login-btn:hover {
+            background-color: #2980b9;
+        }
+    </style>
 </head>
 <body>
     <style id="override-styles">
@@ -34,6 +461,10 @@
     </style>
     <header class="header">
         <h1>OpenManus</h1>
+        <!-- 导航菜单 -->
+        <div class="nav-links">
+            <a href="/" class="nav-item active">首页</a>
+        </div>
         <!-- 认证状态将由login.js动态添加 -->
     </header>
 
@@ -53,6 +484,7 @@
             <div class="tab-container">
                 <div class="tab active" data-target="logs-tab">执行日志</div>
                 <div class="tab" data-target="files-tab">生成文件</div>
+                <div class="tab" data-target="tasks-tab">任务管理</div>
             </div>
             
             <!-- 日志内容 -->
@@ -65,6 +497,15 @@
                 <div id="files" class="files-container">
                     <div id="no-files-message" class="no-files-message">暂无生成文件</div>
                 </div>
+            </div>
+            
+            <!-- 任务管理内容 -->
+            <div id="tasks-tab" class="tab-content">
+                <div id="tasks-loading" class="tasks-loading">
+                    <h3>正在加载任务列表...</h3>
+                    <div class="loading-spinner"></div>
+                </div>
+                <div id="task-list-container"></div>
             </div>
         </div>
     </div>

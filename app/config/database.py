@@ -4,6 +4,7 @@
 """
 import os
 import logging
+import base64
 
 # 设置日志
 logger = logging.getLogger(__name__)
@@ -31,26 +32,51 @@ class DatabaseConfig:
     HOST = os.environ.get("DB_HOST", os.environ.get("MYSQL_HOST", "localhost"))
     PORT = _get_int_env.__func__("DB_PORT", "MYSQL_PORT", "3306")
     USER = os.environ.get("DB_USER", os.environ.get("MYSQL_USER", "root"))
-    PASSWORD = os.environ.get("DB_PASSWORD", os.environ.get("MYSQL_PASSWORD", "password"))
+    # 获取原始密码
+    _RAW_PASSWORD = os.environ.get("DB_PASSWORD", os.environ.get("MYSQL_PASSWORD", "password"))
+    # 处理密码以避免编码问题
+    PASSWORD = _RAW_PASSWORD
     DATABASE = os.environ.get("DB_NAME", os.environ.get("MYSQL_DATABASE", "openmanus"))
-    CHARSET = "utf8mb4"
+    CHARSET = "utf8mb4"  # 使用utf8mb4编码支持完整的Unicode字符集，包括Emoji和中文
     
     @classmethod
     def get_connection_params(cls):
         """获取数据库连接参数"""
+        # 尝试将密码编码为ASCII兼容形式，避免latin-1编码问题
+        try:
+            # 检查密码是否含有非ASCII字符
+            password = cls._RAW_PASSWORD
+            password.encode('ascii')  # 尝试编码为ASCII，如果失败，就进行处理
+        except UnicodeEncodeError:
+            # 如果含有非ASCII字符，使用base64编码处理
+            logger.warning("数据库密码包含非ASCII字符，将进行编码处理")
+            try:
+                # 使用base64编码处理密码
+                encoded_password = base64.b64encode(password.encode('utf-8')).decode('ascii')
+                # 添加前缀标记这是一个编码后的密码
+                password = f"b64:{encoded_password}"
+            except Exception as e:
+                logger.error(f"密码编码失败: {str(e)}")
+                # 如果编码失败，使用默认安全密码
+                password = "defaultpassword"
+        
+        # 添加更多参数确保编码正确处理
         return {
             "host": cls.HOST,
             "port": cls.PORT,
             "user": cls.USER,
-            "password": cls.PASSWORD,
+            "password": password,
             "database": cls.DATABASE,
-            "charset": cls.CHARSET
+            "charset": cls.CHARSET,
+            "use_unicode": True,
+            "init_command": "SET NAMES utf8mb4",
+            "cursorclass": "DictCursor"  # 指定为字符串，避免直接引用对象
         }
     
     @classmethod
     def get_connection_string(cls):
         """获取数据库连接字符串"""
-        return f"mysql+pymysql://{cls.USER}:{cls.PASSWORD}@{cls.HOST}:{cls.PORT}/{cls.DATABASE}"
+        return f"mysql+pymysql://{cls.USER}:{cls.PASSWORD}@{cls.HOST}:{cls.PORT}/{cls.DATABASE}?charset={cls.CHARSET}"
 
 # 腾讯云对象存储(COS)配置
 class COSConfig:

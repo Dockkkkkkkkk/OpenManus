@@ -6,6 +6,7 @@ import json
 import pymysql
 from pymysql.cursors import DictCursor
 from fastapi import HTTPException
+import traceback
 
 # 导入配置
 from app.config.database import DatabaseConfig, DatabaseSchema
@@ -23,8 +24,10 @@ class DBService:
             self.init_db()
             # 如果初始化成功，设置标志为可用
             self.db_available = True
+            logger.info("数据库服务初始化成功")
         except Exception as e:
             logger.error(f"数据库服务初始化失败: {str(e)}")
+            logger.error(traceback.format_exc())
             logger.warning("将在无数据库模式下运行，部分功能可能不可用")
     
     def get_connection(self):
@@ -34,13 +37,52 @@ class DBService:
             raise HTTPException(status_code=503, detail="数据库服务不可用")
             
         try:
+            # 获取连接参数
+            params = DatabaseConfig.get_connection_params()
+            
+            # 处理可能的编码密码
+            if params['password'].startswith('b64:'):
+                import base64
+                # 提取编码部分并解码
+                encoded_part = params['password'][4:]  # 移除 'b64:' 前缀
+                try:
+                    params['password'] = base64.b64decode(encoded_part).decode('utf-8')
+                    logger.debug("成功解码数据库密码")
+                except Exception as decode_err:
+                    logger.error(f"密码解码失败: {str(decode_err)}")
+                    # 如果解码失败，使用一个安全的默认密码
+                    params['password'] = "password"
+            
+            # 避免打印密码，创建一个不含密码的副本用于日志
+            log_params = {k: v for k, v in params.items() if k != 'password'}
+            log_params['password'] = '******'  # 用星号掩盖密码
+            logger.debug(f"数据库连接参数: {log_params}")
+            
+            # 处理cursorclass参数
+            if params.get('cursorclass') == 'DictCursor':
+                params['cursorclass'] = DictCursor
+            
+            # 修改连接方式，避免latin-1编码问题
             conn = pymysql.connect(
-                **DatabaseConfig.get_connection_params(),
-                cursorclass=DictCursor
+                host=params['host'],
+                port=params['port'],
+                user=params['user'],
+                password=params['password'],
+                database=params['database'],
+                charset=params['charset'],
+                use_unicode=True,
+                init_command="SET NAMES utf8mb4",
+                cursorclass=params['cursorclass'] if 'cursorclass' in params else DictCursor
             )
             return conn
+        except UnicodeEncodeError as ue:
+            logger.error(f"数据库连接编码错误: {str(ue)}")
+            logger.error(traceback.format_exc())
+            self.db_available = False
+            raise HTTPException(status_code=500, detail=f"数据库编码错误: {str(ue)}")
         except Exception as e:
             logger.error(f"数据库连接失败: {str(e)}")
+            logger.error(traceback.format_exc())
             self.db_available = False  # 连接失败时更新状态
             raise
     
