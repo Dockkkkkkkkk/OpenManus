@@ -12,7 +12,7 @@ import os
 import re
 import glob
 from pathlib import Path
-from starlette.responses import Response, FileResponse
+from starlette.responses import Response, FileResponse, RedirectResponse
 import uuid
 import toml
 import openai
@@ -41,6 +41,8 @@ try:
 except ImportError:
     print("注意: AI文件识别器模块未找到，将使用传统方法识别文件")
     pass
+from app.services.task_service import task_service
+from app.services.cos_service import cos_service
 
 app = FastAPI()
 
@@ -522,8 +524,12 @@ async def handle_prompt(request: Request, prompt_data: dict):
             print(warning_msg)
             log_interceptor(warning_msg)
             
-            # 异步执行代理
-            asyncio.create_task(process_prompt_with_agent(agent, prompt))
+            # 获取默认模型
+            from app.config import config
+            default_model = config.llm["default"].model
+            
+            # 异步执行代理，使用配置的默认模型
+            asyncio.create_task(process_prompt_with_agent(prompt, default_model, None))
             
             # 返回成功消息
             return {"status": "success", "message": "命令已提交"}
@@ -907,11 +913,16 @@ async def _aiter_stream(stream):
         yield f"生成过程中发生错误: {str(e)}"
 
 # 修改process_prompt_with_agent方法，支持用户信息
-async def process_prompt_with_agent(prompt, model="gpt-4", user_info=None):
+async def process_prompt_with_agent(prompt, model=None, user_info=None):
     """处理提示并记录日志，支持用户信息"""
     global generated_files, current_task_logs, pure_logs, logs_processor_callback
     
     try:
+        # 如果未提供模型，使用配置中的默认模型
+        if model is None:
+            from app.config import config
+            model = config.llm["default"].model
+        
         # 创建任务记录
         user_id = user_info.get('user_id', 'anonymous') if user_info else 'anonymous'
         
@@ -960,8 +971,9 @@ async def process_prompt_with_agent(prompt, model="gpt-4", user_info=None):
                 pure_logs.append(cleaned_log)
                 current_task_logs.append(cleaned_log)
                 
+                # 注释掉实时上传日志的代码，改为只在内存中积累日志
                 # 异步方式记录到数据库
-                asyncio.create_task(task_service.append_task_logs(task_id, cleaned_log))
+                # asyncio.create_task(task_service.append_task_logs(task_id, cleaned_log))
                 
                 # 检查日志长度并触发处理
                 task_status["current_logs_length"] += len(cleaned_log)
@@ -1067,6 +1079,27 @@ async def process_prompt_with_agent(prompt, model="gpt-4", user_info=None):
         # 清除回调
         logs_processor_callback = None
         
+        # 将所有积累的日志一次性上传到COS
+        if current_task_logs:
+            try:
+                # 合并所有日志
+                all_logs_text = "\n".join(current_task_logs)
+                print(f"任务完成，一次性上传所有日志，总长度: {len(all_logs_text)} 字符")
+                
+                # 上传日志到COS
+                log_url = await cos_service.upload_text(
+                    f"task_{task_id}_complete_log.txt", 
+                    all_logs_text, 
+                    f"tasks/{task_id}/logs/"
+                )
+                
+                # 更新任务的日志URL
+                await task_service.update_task_log_url(task_id, log_url)
+                print(f"任务日志上传成功: {log_url}")
+            except Exception as log_error:
+                print(f"上传任务完整日志失败: {str(log_error)}")
+                # 日志上传失败不中断流程
+        
         # 更新任务状态为完成
         await task_service.update_task_status(task_id, "completed")
         
@@ -1083,6 +1116,25 @@ async def process_prompt_with_agent(prompt, model="gpt-4", user_info=None):
         
         # 更新任务状态为失败
         if 'task_id' in locals():
+            # 检查是否有积累的日志需要上传
+            if 'current_task_logs' in locals() and current_task_logs:
+                try:
+                    # 合并所有日志并添加错误信息
+                    current_task_logs.append(f"ERROR: {error_msg}")
+                    all_logs_text = "\n".join(current_task_logs)
+                    print(f"任务失败，上传错误日志，总长度: {len(all_logs_text)} 字符")
+                    
+                    # 上传日志到COS
+                    log_url = await cos_service.upload_text(
+                        f"task_{task_id}_error_log.txt", 
+                        all_logs_text, 
+                        f"tasks/{task_id}/logs/"
+                    )
+                    print(f"错误日志上传成功: {log_url}")
+                except Exception as log_error:
+                    print(f"上传错误日志失败: {str(log_error)}")
+            
+            # 更新任务状态
             await task_service.update_task_status(task_id, "failed", str(e))
         
         # 发送错误消息
@@ -1128,12 +1180,45 @@ async def get_generated_files(request: Request):
         "summary_status": summary_generation_status
     }
 
+@app.get("/api/files/{file_id}/download")
+@Web(auth_required=False)  # 暂时不要求认证，方便测试
+async def download_file(request: Request, file_id: int):
+    """下载任务文件"""
+    try:
+        # 从文件服务或本地获取文件
+        file_data = await task_service.get_file(file_id)
+        
+        if not file_data:
+            raise HTTPException(status_code=404, detail="文件不存在")
+            
+        # 文件信息
+        filename = file_data.get("filename", f"file_{file_id}")
+        file_url = file_data.get("file_url", "")
+            
+        # 如果文件在COS上，重定向到COS URL
+        if file_url and file_url.startswith("http"):
+            return RedirectResponse(file_url)
+            
+        # 如果文件在本地，返回本地文件
+        file_path = file_data.get("local_path", "")
+        if file_path and os.path.exists(file_path):
+            return FileResponse(
+                path=file_path,
+                filename=filename,
+                media_type=file_data.get("content_type", "application/octet-stream")
+            )
+            
+        # 如果找不到文件，返回404
+        raise HTTPException(status_code=404, detail="文件无法访问")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"下载文件失败: {str(e)}")
+
 @app.get("/api/download/{file_name}")
 @Web()  # 默认需要认证
-async def download_file(request: Request, file_name: str):
-    """下载指定的文件（路径参数版本）"""
+async def download_file_query(request: Request, file_name: str):
+    """下载指定的文件（查询参数版本）"""
     # 查找匹配的文件
-    # 兼容generated_files为字符串列表或字典列表的情况
     matching_files = []
     for f in generated_files:
         if isinstance(f, str):
@@ -1155,31 +1240,6 @@ async def download_file(request: Request, file_name: str):
     return FileResponse(
         path=file_path, 
         filename=file_name,
-        media_type="application/octet-stream"
-    )
-
-@app.get("/api/download")
-@Web()  # 默认需要认证
-async def download_file_query(request: Request, filename: str):
-    """下载指定的文件（查询参数版本）"""
-    # 查找匹配的文件
-    matching_files = []
-    for f in generated_files:
-        if isinstance(f, str):
-            if os.path.basename(f) == filename:
-                matching_files.append(f)
-        elif isinstance(f, dict) and f.get("name") == filename:
-            matching_files.append(f.get("path"))
-    
-    if not matching_files:
-        raise HTTPException(status_code=404, detail=f"文件未找到: {filename}")
-    
-    file_path = matching_files[0]
-    
-    # 返回文件
-    return FileResponse(
-        path=file_path, 
-        filename=filename,
         media_type="application/octet-stream"
     )
 
@@ -1212,49 +1272,33 @@ async def run_task(request: Request, prompt: str):
         headers=headers
     )
 
-@app.get("/tasks")
+@app.get("/api/tasks")
 @Web(auth_required=False)
-async def redirect_to_api_tasks(request: Request):
-    """将/tasks路径明确返回JSON格式的任务列表"""
-    # 直接调用task_service获取数据并返回JSONResponse
+async def get_all_tasks(request: Request):
+    """获取所有任务列表，包括数据库和内存中的任务"""
     try:
         # 从请求状态中获取用户信息
         user_info = getattr(request.state, "user", None)
-        if not user_info:
-            return JSONResponse({"error": "需要登录", "message": "请登录后再访问此功能"})
+        user_id = user_info.get("user_id", "test_user") if user_info else "test_user"
             
-        # 获取用户ID
-        user_id = user_info.get("user_id", "")
-        if not user_id:
-            return JSONResponse({"error": "无效的用户信息", "message": "无法获取用户ID"})
-            
-        # 使用任务服务获取任务列表
-        from app.services.task_service import task_service
-        tasks = await task_service.get_user_tasks(user_id, limit=20, offset=0)
+        # 使用任务服务获取所有任务
+        tasks = await task_service.get_user_tasks(user_id, 100, 0)
         
-        # 记录日志
-        print(f"从数据库获取到 {len(tasks)} 个任务，用户ID: {user_id}")
+        # 将日期时间对象转换为字符串
+        for task in tasks:
+            if "created_at" in task and isinstance(task["created_at"], datetime):
+                task["created_at"] = task["created_at"].isoformat()
+            if "updated_at" in task and isinstance(task["updated_at"], datetime):
+                task["updated_at"] = task["updated_at"].isoformat()
+            if "completed_at" in task and isinstance(task["completed_at"], datetime):
+                task["completed_at"] = task["completed_at"].isoformat()
         
-        # 导入datetime转换函数
-        from app.routes import convert_datetime_to_iso
-        
-        # 转换datetime对象为ISO格式字符串
-        serializable_tasks = convert_datetime_to_iso(tasks)
-        
-        # 使用json.dumps确保序列化成功
-        from json import dumps
-        json_data = dumps(serializable_tasks, ensure_ascii=False)
-        
-        # 明确返回JSONResponse，设置媒体类型确保正确处理中文
-        return Response(
-            content=json_data,
-            media_type="application/json; charset=utf-8"
-        )
+        return tasks
     except Exception as e:
-        import traceback
-        print(f"获取任务列表失败: {str(e)}")
-        print(traceback.format_exc())
-        return JSONResponse({"error": "获取任务失败", "message": str(e)})
+        return JSONResponse(
+            {"error": f"无法获取任务列表: {str(e)}"},
+            status_code=500
+        )
 
 @app.get("/{full_path:path}")
 @Web(auth_required=False)  # 不需要认证 - 静态文件和前端页面公开访问
@@ -1397,7 +1441,11 @@ async def process_prompt(request: Request):
     """处理用户的提示，需要认证"""
     form = await request.form()
     prompt = form.get('prompt', '')
-    model = form.get('model', 'gpt-4')
+    
+    # 从配置中获取默认模型
+    from app.config import config
+    default_model = config.llm["default"].model
+    model = form.get('model', default_model)
     
     if not prompt:
         return JSONResponse({'error': '请提供任务描述'}, status_code=400)
@@ -1430,20 +1478,30 @@ async def test_tasks(request: Request):
 @app.get("/api/tasks-direct")
 @Web(auth_required=False)
 async def get_tasks_direct(request: Request):
-    """直接在app上定义的任务列表API"""
-    return [
-        {"id": 3, "name": "直接API任务1", "status": "completed", "created_at": "2023-01-03"},
-        {"id": 4, "name": "直接API任务2", "status": "pending", "created_at": "2023-01-04"}
-    ]
-
-# 保留一个下载文件函数，移除重复定义
-@app.get("/api/files/{file_id}/download")
-@Web(auth_required=False)  # 暂时不要求认证，方便测试
-async def download_file(request: Request, file_id: int):
-    """下载文件"""
-    # 这里应该从存储中获取文件并提供下载
-    # 现在返回一个简单的响应
-    return {"message": f"这里应该提供文件 {file_id} 的下载"}
+    """直接从任务服务获取任务列表（包括内存和数据库中的任务）"""
+    try:
+        # 从请求状态中获取用户信息
+        user_info = getattr(request.state, "user", None)
+        user_id = user_info.get("user_id", "test_user") if user_info else "test_user"
+            
+        # 使用任务服务获取所有任务
+        tasks = await task_service.get_user_tasks(user_id, 20, 0)
+        
+        # 将日期时间对象转换为字符串
+        for task in tasks:
+            if "created_at" in task and isinstance(task["created_at"], datetime):
+                task["created_at"] = task["created_at"].isoformat()
+            if "updated_at" in task and isinstance(task["updated_at"], datetime):
+                task["updated_at"] = task["updated_at"].isoformat()
+            if "completed_at" in task and isinstance(task["completed_at"], datetime):
+                task["completed_at"] = task["completed_at"].isoformat()
+        
+        return tasks
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"无法获取任务列表: {str(e)}"},
+            status_code=500
+        )
 
 # 添加任务服务诊断端点
 @app.get("/api/debug/task-service")
@@ -1522,4 +1580,10 @@ async def debug_routes(request: Request):
         "all_routes": routes,
         "task_router_routes": task_routes,
         "task_router_prefix": getattr(task_router, "prefix", None)
-    } 
+    }
+
+@app.get("/tasks")
+@Web(auth_required=False)
+async def redirect_to_api_tasks(request: Request):
+    """将/tasks路径重定向到/api/tasks"""
+    return RedirectResponse(url="/api/tasks") 

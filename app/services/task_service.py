@@ -411,46 +411,195 @@ class TaskService:
     async def upload_file_to_task(self, task_id: int, file_content: bytes, filename: str, content_type: Optional[str] = None) -> Dict[str, Any]:
         """上传文件到任务"""
         try:
-            # 上传文件到COS
-            upload_result = await cos_service.upload_file(
+            # 使用COS服务上传文件
+            if not cos_service._initialized:
+                logger.warning(f"COS服务未初始化，无法上传文件")
+                return None
+            
+            # 上传文件
+            result = await cos_service.upload_file(
                 file_content=file_content,
                 filename=filename,
                 content_type=content_type,
                 task_id=str(task_id)
             )
             
-            # 创建文件记录
-            file_id = db_service.create_file(
-                task_id=task_id,
-                filename=filename,
-                cos_url=upload_result['url'],
-                content_type=upload_result['content_type'],
-                file_size=upload_result['size']
-            )
-            
-            # 组装结果
-            result = {
-                'id': file_id,
-                'task_id': task_id,
-                'filename': filename,
-                'cos_url': upload_result['url'],
-                'content_type': upload_result['content_type'],
-                'file_size': upload_result['size']
+            if not result:
+                logger.error(f"上传文件失败: 无效的COS上传结果")
+                return None
+                
+            # 保存文件记录到数据库
+            if db_service.db_available:
+                file_id = db_service.add_file(
+                    task_id=task_id,
+                    filename=filename,
+                    file_url=result["url"],
+                    content_type=content_type or ""
+                )
+                
+                if file_id:
+                    # 添加ID到结果
+                    result["id"] = file_id
+                    return result
+                    
+            # 如果数据库不可用，使用内存存储
+            file_id = str(uuid.uuid4())
+            file_record = {
+                "id": file_id,
+                "task_id": task_id,
+                "filename": filename,
+                "file_url": result["url"],
+                "content_type": content_type or "",
+                "created_at": datetime.now().isoformat()
             }
             
+            self.in_memory_files[file_id] = file_record
+            
+            # 将文件记录与任务关联
+            if str(task_id) in self.in_memory_tasks:
+                if "files" not in self.in_memory_tasks[str(task_id)]:
+                    self.in_memory_tasks[str(task_id)]["files"] = []
+                self.in_memory_tasks[str(task_id)]["files"].append(file_record)
+                
+            # 添加ID到结果
+            result["id"] = file_id
             return result
+            
         except Exception as e:
-            logger.error(f"上传文件到任务失败: {str(e)}")
-            raise
+            logger.error(f"上传文件失败: {str(e)}")
+            return None
+            
+    async def upload_local_file(self, task_id: str, filepath: str, target_filename: str = None) -> Dict[str, Any]:
+        """上传本地文件到任务，并保存到数据库
+        
+        Args:
+            task_id: 任务ID
+            filepath: 本地文件路径
+            target_filename: 目标文件名（可选）
+            
+        Returns:
+            包含文件信息的字典，如果失败则返回None
+        """
+        try:
+            if not os.path.exists(filepath):
+                logger.error(f"上传文件失败: 文件不存在 {filepath}")
+                return None
+                
+            # 使用COS服务上传文件
+            if not cos_service._initialized:
+                logger.warning(f"COS服务未初始化，无法上传文件")
+                return None
+                
+            # 获取默认文件名（如果未提供目标文件名）
+            if not target_filename:
+                target_filename = os.path.basename(filepath)
+                
+            # 上传文件到COS
+            result = await cos_service.upload_local_file(
+                filepath=filepath,
+                task_id=str(task_id),
+                target_filename=target_filename
+            )
+            
+            if not result:
+                logger.error(f"上传文件失败: 无效的COS上传结果")
+                return None
+                
+            # 获取内容类型
+            content_type = result.get("content_type", "")
+                
+            # 保存文件记录到数据库
+            if db_service.db_available:
+                file_id = db_service.add_file(
+                    task_id=task_id,
+                    filename=target_filename,
+                    file_url=result["url"],
+                    content_type=content_type
+                )
+                
+                if file_id:
+                    # 添加ID到结果
+                    result["id"] = file_id
+                    result["filename"] = target_filename
+                    result["cos_url"] = result["url"]
+                    return result
+                    
+            # 如果数据库不可用，使用内存存储
+            file_id = str(uuid.uuid4())
+            file_record = {
+                "id": file_id,
+                "task_id": task_id,
+                "filename": target_filename,
+                "file_url": result["url"],
+                "content_type": content_type,
+                "created_at": datetime.now().isoformat()
+            }
+            
+            self.in_memory_files[file_id] = file_record
+            
+            # 将文件记录与任务关联
+            if str(task_id) in self.in_memory_tasks:
+                if "files" not in self.in_memory_tasks[str(task_id)]:
+                    self.in_memory_tasks[str(task_id)]["files"] = []
+                self.in_memory_tasks[str(task_id)]["files"].append(file_record)
+                
+            # 构建返回结果
+            return {
+                "id": file_id,
+                "filename": target_filename,
+                "cos_url": result["url"],
+                "content_type": content_type,
+                "size": result.get("size", 0)
+            }
+            
+        except Exception as e:
+            logger.error(f"上传本地文件失败: {str(e)}")
+            return None
     
     async def get_task_files(self, task_id: int) -> List[Dict[str, Any]]:
-        """获取任务的所有文件"""
+        """获取任务的文件列表"""
         try:
-            files = db_service.get_task_files(task_id)
+            # 如果数据库可用，从数据库获取文件列表
+            if db_service.db_available:
+                files = db_service.get_task_files(task_id)
+                logger.debug(f"从数据库获取任务文件: ID={task_id}, 文件数={len(files)}")
+                return files
+                
+            # 如果数据库不可用，从内存获取文件列表
+            files = []
+            for file_id, file in self.in_memory_files.items():
+                if file.get("task_id") == str(task_id):
+                    files.append(file)
+            
+            logger.debug(f"内存模式: 获取任务文件: ID={task_id}, 文件数={len(files)}")
             return files
+            
         except Exception as e:
-            logger.error(f"获取任务文件失败: {str(e)}")
-            raise
+            logger.error(f"获取任务文件列表失败: {str(e)}")
+            return []
+            
+    async def get_file(self, file_id: str) -> Optional[Dict[str, Any]]:
+        """获取单个文件的详细信息"""
+        try:
+            # 如果数据库可用，从数据库获取文件
+            if db_service.db_available:
+                file = db_service.get_file(file_id)
+                if file:
+                    logger.debug(f"从数据库获取文件: ID={file_id}")
+                    return file
+                    
+            # 如果数据库不可用或文件不存在，尝试从内存获取
+            if str(file_id) in self.in_memory_files:
+                file = self.in_memory_files[str(file_id)]
+                logger.debug(f"内存模式: 获取文件: ID={file_id}")
+                return file
+                
+            logger.warning(f"文件不存在: ID={file_id}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"获取文件失败: {str(e)}")
+            return None
     
     async def download_task_file(self, file_id: int) -> Optional[Dict[str, Any]]:
         """下载任务文件"""

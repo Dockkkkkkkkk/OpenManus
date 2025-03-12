@@ -205,6 +205,44 @@ class COSService:
             logger.error(f"从COS下载文件失败: {e}")
             raise
     
+    async def upload_text(self, filename: str, text_content: str, prefix: str = "uploads/") -> str:
+        """
+        上传文本内容到COS
+        :param filename: 文件名
+        :param text_content: 文本内容
+        :param prefix: 存储路径前缀
+        :return: 文件的COS URL
+        """
+        try:
+            # 确保存储桶存在
+            self.ensure_bucket_exists()
+            
+            # 将文本内容转换为字节
+            content_bytes = text_content.encode('utf-8')
+            
+            # 构建对象键，确保前缀有正确的格式
+            if not prefix.endswith('/'):
+                prefix += '/'
+            object_key = f"{prefix}{filename}"
+            
+            # 使用内存流上传
+            with io.BytesIO(content_bytes) as file_stream:
+                self.client.put_object(
+                    Bucket=COSConfig.BUCKET,
+                    Body=file_stream,
+                    Key=object_key,
+                    ContentType='text/plain; charset=utf-8'
+                )
+            
+            # 返回文件URL
+            file_url = self.get_file_url(object_key)
+            logger.info(f"文本内容上传成功: {object_key}")
+            return file_url
+            
+        except Exception as e:
+            logger.error(f"上传文本内容到COS失败: {str(e)}")
+            raise
+    
     def _guess_content_type(self, filename: str) -> str:
         """根据文件扩展名猜测内容类型"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''

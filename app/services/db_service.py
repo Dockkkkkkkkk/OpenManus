@@ -72,7 +72,9 @@ class DBService:
                 charset=params['charset'],
                 use_unicode=True,
                 init_command="SET NAMES utf8mb4",
-                cursorclass=params['cursorclass'] if 'cursorclass' in params else DictCursor
+                cursorclass=params['cursorclass'] if 'cursorclass' in params else DictCursor,
+                # 禁用内部latin-1编码转换
+                binary_prefix=True
             )
             return conn
         except UnicodeEncodeError as ue:
@@ -428,37 +430,61 @@ class DBService:
         finally:
             conn.close()
     
-    def get_file(self, file_id: int) -> Optional[Dict[str, Any]]:
-        """获取文件信息"""
+    def add_file(self, task_id: int, filename: str, file_url: str, content_type: str = "") -> int:
+        """添加文件记录到数据库"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            cursor.execute('SELECT * FROM files WHERE id = %s', (file_id,))
-            file = cursor.fetchone()
-            
-            return dict(file) if file else None
+            cursor.execute(
+                'INSERT INTO files (task_id, filename, cos_url, content_type, created_at) VALUES (%s, %s, %s, %s, %s)',
+                (task_id, filename, file_url, content_type, now)
+            )
+            file_id = cursor.lastrowid
+            conn.commit()
+            return file_id
         except Exception as e:
-            logger.error(f"获取文件信息失败: {str(e)}")
-            raise
+            conn.rollback()
+            logger.error(f"添加文件记录失败: {str(e)}")
+            return 0
         finally:
             conn.close()
     
+    def get_file(self, file_id: int) -> Optional[Dict[str, Any]]:
+        """获取单个文件的详细信息"""
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    query = f"""
+                    SELECT * 
+                    FROM {DatabaseSchema.FILES_TABLE}
+                    WHERE id = %s
+                    """
+                    cursor.execute(query, (file_id,))
+                    file = cursor.fetchone()
+                    return file
+        except Exception as e:
+            logger.error(f"获取文件详情失败: {str(e)}")
+            return None
+    
     def get_task_files(self, task_id: int) -> List[Dict[str, Any]]:
         """获取任务的所有文件"""
-        conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-            
-            cursor.execute('SELECT * FROM files WHERE task_id = %s ORDER BY created_at', (task_id,))
-            files = cursor.fetchall()
-            
-            return [dict(file) for file in files]
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    query = f"""
+                    SELECT * 
+                    FROM {DatabaseSchema.FILES_TABLE}
+                    WHERE task_id = %s
+                    ORDER BY created_at DESC
+                    """
+                    cursor.execute(query, (task_id,))
+                    files = cursor.fetchall()
+                    return files
         except Exception as e:
             logger.error(f"获取任务文件失败: {str(e)}")
-            raise
-        finally:
-            conn.close()
+            return []
     
     def delete_file(self, file_id: int) -> bool:
         """删除文件记录"""
