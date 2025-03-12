@@ -685,34 +685,43 @@ class TaskService:
                         log_content = await cos_service.download_file(task['log_url'])
                         if log_content:
                             # 将日志内容解析为日志项列表
-                            log_lines = log_content.strip().split('\n')
+                            log_lines = log_content.strip().split(b'\n')
                             for line in log_lines:
                                 if not line.strip():
                                     continue
-                                    
+                                
                                 try:
                                     # 尝试解析为JSON（如果是结构化日志）
+                                    line_str = line.decode('utf-8', errors='replace')
                                     import json
-                                    log_item = json.loads(line)
-                                    logs.append(log_item)
-                                except json.JSONDecodeError:
-                                    # 如果不是JSON，按普通文本处理
-                                    timestamp = datetime.now().isoformat()
-                                    if '[' in line and ']' in line:
-                                        # 尝试提取时间戳
-                                        try:
-                                            timestamp_str = line.split('[')[1].split(']')[0]
-                                            timestamp = datetime.fromisoformat(timestamp_str).isoformat()
-                                            message = line.split(']', 1)[1].strip()
-                                        except:
-                                            message = line
-                                    else:
-                                        message = line
-                                    
+                                    try:
+                                        log_item = json.loads(line_str)
+                                        logs.append(log_item)
+                                    except json.JSONDecodeError:
+                                        # 如果不是JSON，按普通文本处理
+                                        timestamp = datetime.now().isoformat()
+                                        if '[' in line_str and ']' in line_str:
+                                            # 尝试提取时间戳
+                                            try:
+                                                timestamp_str = line_str.split('[')[1].split(']')[0]
+                                                timestamp = datetime.fromisoformat(timestamp_str).isoformat()
+                                                message = line_str.split(']', 1)[1].strip()
+                                            except:
+                                                message = line_str
+                                        else:
+                                            message = line_str
+                                        
+                                        logs.append({
+                                            'timestamp': timestamp,
+                                            'level': 'info',
+                                            'message': message
+                                        })
+                                except Exception as decode_error:
+                                    # 解码失败，添加原始数据作为消息
                                     logs.append({
-                                        'timestamp': timestamp,
-                                        'level': 'info',
-                                        'message': message
+                                        'timestamp': datetime.now().isoformat(),
+                                        'level': 'warning',
+                                        'message': f"日志解码失败: {str(decode_error)}, 原始数据: {str(line)}"
                                     })
                     except Exception as e:
                         logger.error(f"下载日志内容失败: {str(e)}")
@@ -759,6 +768,14 @@ class TaskService:
                         'level': level,
                         'message': message
                     })
+            
+            # 如果仍然没有日志，添加一个默认日志
+            if not logs:
+                logs.append({
+                    'timestamp': datetime.now().isoformat(),
+                    'level': 'info',
+                    'message': '暂无日志记录'
+                })
             
             # 确保日志按时间排序
             logs.sort(key=lambda x: x.get('timestamp', ''), reverse=False)

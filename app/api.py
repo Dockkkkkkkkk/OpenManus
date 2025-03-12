@@ -1,9 +1,9 @@
-from fastapi import FastAPI, Body, Request, HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi import FastAPI, Body, Request, HTTPException, Depends, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from typing import Annotated, List, Dict, Any, Optional
+from typing import Annotated, List, Dict, Any, Optional, AsyncGenerator
 import json
 import queue
 import time
@@ -24,7 +24,7 @@ import platform
 import httpx
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse
-from app.auth import Web, update_auth_config
+from app.auth import Web, update_auth_config, requires_auth, verify_auth
 from app.auth_routes import router as auth_router
 # 导入任务管理路由
 from app.routes.task_routes import router as task_router
@@ -43,6 +43,7 @@ except ImportError:
     pass
 from app.services.task_service import task_service
 from app.services.cos_service import cos_service
+from app.services.db_service import db_service
 
 app = FastAPI()
 
@@ -1839,7 +1840,7 @@ async def get_task_logs(request: Request):
     logger.info(f"获取任务日志: task_id={task_id}")
     
     # 验证任务是否存在
-    task = await task_service.get_task_by_id(task_id)
+    task = await task_service.get_task(task_id)
     if not task:
         logger.warning(f"任务不存在: task_id={task_id}")
         return JSONResponse(
@@ -1954,3 +1955,31 @@ async def run_task(request: Request, prompt: str):
         media_type="text/event-stream",
         headers=headers
     )
+
+# 定义获取用户信息的函数
+def get_user_info(request: Request) -> dict:
+    """从请求中获取用户信息
+    
+    Args:
+        request: FastAPI请求对象
+        
+    Returns:
+        dict: 包含用户信息的字典，如果没有用户信息则返回空字典
+    """
+    # 检查请求状态中是否有用户信息
+    if hasattr(request.state, 'user') and request.state.user:
+        return request.state.user
+    
+    # 从查询参数获取用户信息
+    user_id = request.query_params.get('user_id')
+    username = request.query_params.get('username')
+    
+    if user_id and username:
+        return {
+            "id": user_id,
+            "user_id": user_id,
+            "username": username
+        }
+    
+    # 如果没有找到用户信息，返回空字典
+    return {"username": "访客", "id": "guest"}

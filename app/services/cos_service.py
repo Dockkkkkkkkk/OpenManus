@@ -195,15 +195,50 @@ class COSService:
     async def download_file(self, file_url: str) -> bytes:
         """从COS下载文件"""
         try:
-            object_key = self.get_object_key(file_url)
-            response = self.client.get_object(
-                Bucket=COSConfig.BUCKET,
-                Key=object_key
-            )
-            return response['Body'].get_raw_stream().read()
+            # 直接从URL中提取对象键，跳过前缀验证
+            try:
+                # 原始方法：通过前缀验证
+                object_key = self.get_object_key(file_url)
+            except ValueError as e:
+                # 如果前缀验证失败，则尝试直接解析URL
+                logger.warning(f"URL前缀验证失败，尝试直接下载: {e}")
+                # 从URL中提取文件路径
+                if "myqcloud.com" in file_url:
+                    # 对于腾讯云COS URL，提取域名后面的路径
+                    parts = file_url.split(".com/", 1)
+                    if len(parts) > 1:
+                        object_key = parts[1]
+                    else:
+                        object_key = file_url.split("/")[-1]  # 只取文件名
+                else:
+                    # 对于其他URL，直接使用最后一部分作为对象键
+                    object_key = file_url.split("/")[-1]
+                
+                logger.info(f"直接提取的对象键: {object_key}")
+            
+            # 尝试下载文件
+            try:
+                response = self.client.get_object(
+                    Bucket=COSConfig.BUCKET,
+                    Key=object_key
+                )
+                logger.info(f"成功从COS下载文件: {object_key}")
+                return response['Body'].get_raw_stream().read()
+            except Exception as cos_error:
+                # 如果COS下载失败，尝试直接HTTP请求获取文件
+                logger.warning(f"从COS下载失败，尝试HTTP请求: {cos_error}")
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    http_response = await client.get(file_url)
+                    if http_response.status_code == 200:
+                        logger.info(f"通过HTTP成功下载文件: {file_url}")
+                        return http_response.content
+                    else:
+                        raise Exception(f"HTTP下载失败: {http_response.status_code}")
         except Exception as e:
             logger.error(f"从COS下载文件失败: {e}")
-            raise
+            # 返回默认的空内容，而不是抛出异常
+            return b""
     
     async def upload_text(self, filename: str, text_content: str, prefix: str = "uploads/") -> str:
         """

@@ -330,19 +330,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const filesListElement = document.getElementById('task-files-list');
                 if (filesListElement) {
                     // 使用POST方法获取文件列表，通过请求体传递参数
-                    fetch(`/api/task_detail/files`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ task_id: taskId })
-                    })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error(`获取文件列表失败: ${response.status}`);
-                            }
-                            return response.json();
-                        })
+                    fetchGeneratedFiles(taskId)
                         .then(files => {
                             if (!files || files.length === 0) {
                                 filesListElement.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
@@ -387,7 +375,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                             return response.json();
                         })
-                        .then(logs => {
+                        .then(data => {
+                            // 从返回的数据中提取logs数组
+                            const logs = data.logs || [];
+                            console.log('获取到日志数据:', logs);
+                            
                             if (!logs || logs.length === 0) {
                                 logsListElement.innerHTML = '<div class="empty-message">此任务暂无执行日志</div>';
                             } else {
@@ -404,7 +396,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         })
                         .catch(error => {
                             console.error('获取日志失败:', error);
-                            logsListElement.innerHTML = '<div class="error-message">获取日志失败</div>';
+                            logsListElement.innerHTML = `<div class="error-message">获取日志失败：${error}</div>`;
                         });
                 }
             })
@@ -613,30 +605,77 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // 添加文件获取函数
-    function fetchGeneratedFiles() {
-        console.log('获取生成的文件列表');
-        
-        // 使用fetchWithAuth处理API请求，自动处理认证失败
-        window.Auth.fetchWithAuth('/api/files')
-            .then(response => {
-                if (response.ok && response.data && response.data.files) {
-                    console.log('成功获取文件列表:', response.data.files);
-                    
-                    // 将文件名转换为数组
-                    const filenames = response.data.files.map(file => file.name || file.path);
-                    
-                    // 更新文件列表
-                    if (filenames.length > 0) {
-                        updateGeneratedFiles(filenames);
-                        showFileLoading(false);
-                    }
-                } else {
-                    console.log('获取文件列表失败或为空');
-                }
-            })
-            .catch(error => {
-                console.error('获取文件列表出错:', error);
+    async function fetchGeneratedFiles(taskId) {
+        try {
+            console.log(`正在获取任务 ${taskId} 的生成文件列表...`);
+            
+            // 显示加载状态
+            const fileList = document.getElementById('file-list');
+            if (fileList) {
+                fileList.innerHTML = '<div class="loading">正在加载文件列表...</div>';
+            }
+            
+            // 使用POST方法和请求体传递任务ID
+            const response = await fetchWithAuth(`/api/task_detail/files`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ task_id: taskId })
             });
+            
+            if (response.ok) {
+                // 处理响应数据 - 兼容两种格式：直接数组或包含files字段的对象
+                const files = Array.isArray(response.data) ? response.data : 
+                             (response.data && response.data.files ? response.data.files : []);
+                
+                console.log(`获取到 ${files.length} 个文件`);
+                
+                // 更新文件列表UI
+                if (fileList) {
+                    if (files.length === 0) {
+                        fileList.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
+                    } else {
+                        // 构建文件列表HTML
+                        const filesHtml = files.map(file => `
+                            <div class="file-item">
+                                <div class="file-info">
+                                    <div class="file-name">${file.filename}</div>
+                                    <div class="file-meta">
+                                        <span class="file-size">${formatFileSize(file.size || 0)}</span>
+                                        <span class="file-date">${formatDate(file.created_at)}</span>
+                                    </div>
+                                </div>
+                                <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
+                            </div>
+                        `).join('');
+                        
+                        fileList.innerHTML = filesHtml;
+                    }
+                }
+                
+                return files;
+            } else {
+                console.error('获取文件列表失败:', response.status, response.message);
+                
+                if (fileList) {
+                    fileList.innerHTML = '<div class="error-message">获取文件列表失败</div>';
+                }
+                
+                // 即使请求失败也返回空数组，而不是undefined
+                return [];
+            }
+        } catch (error) {
+            console.error('获取文件列表出错:', error);
+            
+            const fileList = document.getElementById('file-list');
+            if (fileList) {
+                fileList.innerHTML = '<div class="error-message">获取文件列表时出错</div>';
+            }
+            
+            // 出错时返回空数组而不是undefined
+            return [];
+        }
     }
     
     // 监听任务提交事件
@@ -685,11 +724,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 elements.submit.disabled = false;
                 elements.processingIndicator.style.display = 'none';
                 return;
-            }
-            
-            // 处理响应
-            if (!result.ok) {
-                throw new Error(`任务提交失败: ${result.status}`);
             }
             
             // 创建新的EventSource连接
@@ -805,80 +839,6 @@ async function fetchTasks() {
 }
 
 /**
- * 获取任务生成的文件列表
- * @param {string} taskId - 任务ID
- * @returns {Promise<Array>} - 文件列表
- */
-async function fetchGeneratedFiles(taskId) {
-    try {
-        console.log(`正在获取任务 ${taskId} 的生成文件列表...`);
-        
-        // 显示加载状态
-        const fileList = document.getElementById('file-list');
-        if (fileList) {
-            fileList.innerHTML = '<div class="loading">正在加载文件列表...</div>';
-        }
-        
-        // 使用POST方法和请求体传递任务ID
-        const response = await fetchWithAuth(`/api/task_detail/files`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ task_id: taskId })
-        });
-        
-        if (response.ok && Array.isArray(response.data)) {
-            console.log(`获取到 ${response.data.length} 个文件`);
-            
-            // 更新文件列表UI
-            if (fileList) {
-                if (response.data.length === 0) {
-                    fileList.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
-                } else {
-                    // 构建文件列表HTML
-                    const filesHtml = response.data.map(file => `
-                        <div class="file-item">
-                            <div class="file-info">
-                                <div class="file-name">${file.filename}</div>
-                                <div class="file-meta">
-                                    <span class="file-size">${formatFileSize(file.size || 0)}</span>
-                                    <span class="file-date">${formatDate(file.created_at)}</span>
-                                </div>
-                            </div>
-                            <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
-                        </div>
-                    `).join('');
-                    
-                    fileList.innerHTML = filesHtml;
-                }
-            }
-            
-            return response.data;
-        } else {
-            console.error('获取文件列表失败:', response.status, response.message);
-            
-            if (fileList) {
-                fileList.innerHTML = '<div class="error-message">获取文件列表失败</div>';
-            }
-            
-            // 即使请求失败也返回空数组，而不是undefined
-            return [];
-        }
-    } catch (error) {
-        console.error('获取文件列表出错:', error);
-         
-        const fileList = document.getElementById('file-list');
-        if (fileList) {
-            fileList.innerHTML = '<div class="error-message">获取文件列表时出错</div>';
-        }
-         
-        // 出错时返回空数组而不是undefined
-        return [];
-    }
-}
-
-/**
  * 格式化文件大小
  * @param {number} bytes - 字节数
  * @returns {string} - 格式化后的大小
@@ -913,93 +873,6 @@ function formatDate(dateStr) {
     } catch (e) {
         console.error('日期格式化错误:', e);
         return dateStr;
-    }
-}
-
-/**
- * 处理事件
- * @param {Object} event - 事件对象
- */
-function handleEvent(event) {
-    if (!event || !event.type) {
-        console.error('收到无效事件:', event);
-        return;
-    }
-    
-    console.log(`处理事件: ${event.type}`, event);
-    
-    const submitBtn = document.getElementById('submit-btn');
-    const processingIndicator = document.getElementById('processing-indicator');
-    
-    switch (event.type) {
-        case 'start':
-            // 任务开始，禁用提交按钮，显示处理指示器
-            if (submitBtn) submitBtn.disabled = true;
-            if (processingIndicator) processingIndicator.style.display = 'block';
-            break;
-            
-        case 'progress':
-            // 更新处理进度，可以在这里显示百分比等
-            if (processingIndicator) {
-                processingIndicator.textContent = `处理中... ${event.progress || ''}`;
-            }
-            break;
-            
-        case 'error':
-            // 错误处理
-            if (submitBtn) submitBtn.disabled = false;
-            if (processingIndicator) processingIndicator.style.display = 'none';
-            
-            // 显示错误信息
-            showMessage('error', event.message || '处理过程中发生错误');
-            break;
-            
-        case 'completion':
-            // 任务完成
-            if (submitBtn) submitBtn.disabled = false;
-            if (processingIndicator) processingIndicator.style.display = 'none';
-            
-            // 显示成功信息
-            showMessage('success', event.message || '处理已完成');
-            
-            // 检查是否有任务ID
-            if (event.task_id) {
-                console.log(`任务 ${event.task_id} 已完成，准备获取生成的文件`);
-                
-                // 切换到文件标签并显示加载状态
-                setTimeout(() => {
-                    // 获取文件标签和内容区域
-                    const fileTab = document.querySelector('.tab[data-tab="file"]');
-                    const fileContent = document.getElementById('file-content');
-                    
-                    if (fileTab && fileContent) {
-                        // 激活文件标签
-                        document.querySelectorAll('.tab').forEach(tab => {
-                            tab.classList.remove('active');
-                        });
-                        fileTab.classList.add('active');
-                        
-                        // 隐藏所有内容区域，显示文件内容区域
-                        document.querySelectorAll('.content-area').forEach(content => {
-                            content.style.display = 'none';
-                        });
-                        fileContent.style.display = 'block';
-                        
-                        // 显示加载状态
-                        fileContent.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div><p>正在获取生成的文件...</p></div>';
-                        
-                        // 获取文件列表
-                        setTimeout(() => {
-                            fetchGeneratedFiles(event.task_id);
-                        }, 500);
-                    }
-                }, 1000);
-            }
-            break;
-            
-        default:
-            console.log(`未处理的事件类型: ${event.type}`);
-            break;
     }
 }
 
