@@ -196,20 +196,50 @@ document.addEventListener('DOMContentLoaded', function() {
      * @param {string|number} taskId - 任务ID
      */
     function loadTaskDetail(taskId) {
-        // 获取任务容器
-        const tasksContainer = document.getElementById('tasks-tab');
-        const loadingElement = document.getElementById('tasks-loading');
+        console.log(`加载任务详情: ID=${taskId}`);
         
-        if (!tasksContainer || !loadingElement) {
-            console.error('找不到任务容器或加载状态元素');
-            return;
+        // 获取或创建任务容器
+        let tasksContainer = document.getElementById('tasks-tab');
+        
+        // 如果找不到任务容器，尝试创建一个临时容器
+        if (!tasksContainer) {
+            console.log('找不到tasks-tab容器，尝试查找或创建替代容器');
+            // 尝试查找其他可能的容器
+            tasksContainer = document.querySelector('.task-container') || document.querySelector('main');
+            
+            // 如果仍然找不到，创建临时容器并添加到页面
+            if (!tasksContainer) {
+                console.log('创建临时任务容器');
+                tasksContainer = document.createElement('div');
+                tasksContainer.id = 'temp-tasks-container';
+                tasksContainer.className = 'task-container';
+                document.body.appendChild(tasksContainer);
+            }
+        }
+        
+        // 创建或获取加载状态元素
+        let loadingElement = document.getElementById('tasks-loading');
+        if (!loadingElement) {
+            console.log('找不到加载状态元素，创建临时加载元素');
+            loadingElement = document.createElement('div');
+            loadingElement.id = 'tasks-loading';
+            loadingElement.className = 'loading-indicator';
+            loadingElement.innerHTML = '<div class="spinner"></div><span>正在加载...</span>';
+            loadingElement.style.display = 'none';
+            tasksContainer.appendChild(loadingElement);
         }
         
         // 显示加载状态
         loadingElement.style.display = 'flex';
         
-        // 获取任务详情
-        fetchTaskDetail(taskId)
+        // 直接使用fetchWithAuth获取任务详情，避免undefined问题
+        fetchWithAuth(`/api/task_detail?task_id=${taskId}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`获取任务详情失败: ${response.status}`);
+                }
+                return response.data;
+            })
             .then(task => {
                 // 隐藏加载状态
                 loadingElement.style.display = 'none';
@@ -219,7 +249,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         <div class="error-message">
                             <h3>未找到任务</h3>
                             <p>无法找到ID为 ${taskId} 的任务</p>
-                            <button class="back-btn" onclick="loadTasksIframe()">返回任务列表</button>
+                            <button class="back-btn" onclick="location.href='/tasks'">返回任务列表</button>
                         </div>
                     `;
                     return;
@@ -249,7 +279,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const taskDetailHTML = `
                     <div class="task-detail">
                         <div class="task-detail-header">
-                            <button class="back-btn" onclick="loadTasksIframe()">返回任务列表</button>
+                            <button class="back-btn" onclick="location.href='/tasks'">返回任务列表</button>
                             <h2>任务详情</h2>
                         </div>
                         
@@ -298,56 +328,85 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // 加载任务文件
                 const filesListElement = document.getElementById('task-files-list');
-                fetchGeneratedFiles(taskId)
-                    .then(files => {
-                        if (!files || files.length === 0) {
-                            filesListElement.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
-                        } else {
-                            // 构建文件列表HTML
-                            const filesHtml = files.map(file => `
-                                <div class="file-item">
-                                    <div class="file-info">
-                                        <div class="file-name">${file.filename}</div>
-                                        <div class="file-meta">
-                                            <span class="file-size">${formatFileSize(file.size)}</span>
-                                            <span class="file-date">${formatDate(file.created_at)}</span>
-                                        </div>
-                                    </div>
-                                    <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
-                                </div>
-                            `).join('');
-                            
-                            filesListElement.innerHTML = filesHtml;
-                        }
+                if (filesListElement) {
+                    // 使用POST方法获取文件列表，通过请求体传递参数
+                    fetch(`/api/task_detail/files`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ task_id: taskId })
                     })
-                    .catch(error => {
-                        console.error('获取文件列表失败:', error);
-                        filesListElement.innerHTML = '<div class="error-message">获取文件列表失败</div>';
-                    });
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`获取文件列表失败: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(files => {
+                            if (!files || files.length === 0) {
+                                filesListElement.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
+                            } else {
+                                // 构建文件列表HTML
+                                const filesHtml = files.map(file => `
+                                    <div class="file-item">
+                                        <div class="file-info">
+                                            <div class="file-name">${file.filename}</div>
+                                            <div class="file-meta">
+                                                <span class="file-size">${formatFileSize(file.size || 0)}</span>
+                                                <span class="file-date">${formatDate(file.created_at)}</span>
+                                            </div>
+                                        </div>
+                                        <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
+                                    </div>
+                                `).join('');
+                                
+                                filesListElement.innerHTML = filesHtml;
+                            }
+                        })
+                        .catch(error => {
+                            console.error('获取文件列表失败:', error);
+                            filesListElement.innerHTML = '<div class="error-message">获取文件列表失败</div>';
+                        });
+                }
                 
                 // 加载任务日志
                 const logsListElement = document.getElementById('task-logs-list');
-                fetch(`/api/tasks/${taskId}/logs`)
-                    .then(response => response.json())
-                    .then(logs => {
-                        if (!logs || logs.length === 0) {
-                            logsListElement.innerHTML = '<div class="empty-message">此任务暂无执行日志</div>';
-                        } else {
-                            // 构建日志列表HTML
-                            const logsHtml = logs.map(log => `
-                                <div class="log-item log-${log.level || 'info'}">
-                                    <div class="log-time">${formatDate(log.timestamp)}</div>
-                                    <div class="log-message">${log.message}</div>
-                                </div>
-                            `).join('');
-                            
-                            logsListElement.innerHTML = logsHtml;
-                        }
+                if (logsListElement) {
+                    // 使用POST方法获取任务日志，通过请求体传递参数
+                    fetch(`/api/task_detail/logs`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ task_id: taskId })
                     })
-                    .catch(error => {
-                        console.error('获取日志失败:', error);
-                        logsListElement.innerHTML = '<div class="error-message">获取日志失败</div>';
-                    });
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`获取日志失败: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(logs => {
+                            if (!logs || logs.length === 0) {
+                                logsListElement.innerHTML = '<div class="empty-message">此任务暂无执行日志</div>';
+                            } else {
+                                // 构建日志列表HTML
+                                const logsHtml = logs.map(log => `
+                                    <div class="log-item log-${log.level || 'info'}">
+                                        <div class="log-time">${formatDate(log.timestamp)}</div>
+                                        <div class="log-message">${log.message}</div>
+                                    </div>
+                                `).join('');
+                                
+                                logsListElement.innerHTML = logsHtml;
+                            }
+                        })
+                        .catch(error => {
+                            console.error('获取日志失败:', error);
+                            logsListElement.innerHTML = '<div class="error-message">获取日志失败</div>';
+                        });
+                }
             })
             .catch(error => {
                 console.error('加载任务详情失败:', error);
@@ -357,7 +416,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="error-message">
                         <h3>加载失败</h3>
                         <p>无法加载任务详情: ${error.message}</p>
-                        <button class="back-btn" onclick="loadTasksIframe()">返回任务列表</button>
+                        <button class="back-btn" onclick="location.href='/tasks'">返回任务列表</button>
                     </div>
                 `;
             });
@@ -746,19 +805,6 @@ async function fetchTasks() {
 }
 
 /**
- * 获取任务详情
- * @param {string} taskId - 任务ID
- * @returns {Promise<Object>} - 任务详情
- */
-async function fetchTaskDetail(taskId) {
-    const response = await fetchWithAuth(`/api/tasks/${taskId}`);
-    if (response.ok && response.data) {
-        return response.data;
-    }
-    return null;
-}
-
-/**
  * 获取任务生成的文件列表
  * @param {string} taskId - 任务ID
  * @returns {Promise<Array>} - 文件列表
@@ -773,7 +819,14 @@ async function fetchGeneratedFiles(taskId) {
             fileList.innerHTML = '<div class="loading">正在加载文件列表...</div>';
         }
         
-        const response = await fetchWithAuth(`/api/tasks/${taskId}/files`);
+        // 使用POST方法和请求体传递任务ID
+        const response = await fetchWithAuth(`/api/task_detail/files`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ task_id: taskId })
+        });
         
         if (response.ok && Array.isArray(response.data)) {
             console.log(`获取到 ${response.data.length} 个文件`);
@@ -789,7 +842,7 @@ async function fetchGeneratedFiles(taskId) {
                             <div class="file-info">
                                 <div class="file-name">${file.filename}</div>
                                 <div class="file-meta">
-                                    <span class="file-size">${formatFileSize(file.size)}</span>
+                                    <span class="file-size">${formatFileSize(file.size || 0)}</span>
                                     <span class="file-date">${formatDate(file.created_at)}</span>
                                 </div>
                             </div>
@@ -809,16 +862,18 @@ async function fetchGeneratedFiles(taskId) {
                 fileList.innerHTML = '<div class="error-message">获取文件列表失败</div>';
             }
             
+            // 即使请求失败也返回空数组，而不是undefined
             return [];
         }
     } catch (error) {
         console.error('获取文件列表出错:', error);
-        
+         
         const fileList = document.getElementById('file-list');
         if (fileList) {
             fileList.innerHTML = '<div class="error-message">获取文件列表时出错</div>';
         }
-        
+         
+        // 出错时返回空数组而不是undefined
         return [];
     }
 }

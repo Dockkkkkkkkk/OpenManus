@@ -3,18 +3,34 @@
  * 提供任务列表、详情查看和文件下载功能
  */
 document.addEventListener('DOMContentLoaded', function() {
+    initTaskManager();
+});
+
+/**
+ * 全局初始化任务管理器方法，可以在任何时候调用
+ */
+function initTaskManager() {
+    // 如果已经初始化，不重复执行
+    if (window.TaskManager && window.TaskManager.initialized) {
+        console.log('任务管理器已经初始化，跳过重复初始化');
+        return;
+    }
+    
     // 检查任务管理界面是否存在
     const taskListEl = document.getElementById('task-list');
     const taskDetailEl = document.getElementById('task-detail');
     
     // 如果不存在任务管理相关元素，不初始化此模块
-    if (!taskListEl) {
+    if (!taskListEl && !document.getElementById('tasks-tab')) {
         console.log('任务管理界面未加载，跳过初始化');
         return;
     }
     
     // 任务管理器对象
     const TaskManager = {
+        // 初始化标志
+        initialized: true,
+        
         // 当前选中的任务ID
         currentTaskId: null,
         
@@ -25,18 +41,15 @@ document.addEventListener('DOMContentLoaded', function() {
             // 创建任务管理界面元素
             this.createTaskUI();
             
+            console.log('任务管理界面元素创建完成，检查关键元素：', {
+                taskList: document.getElementById('task-list'),
+                taskDetail: document.getElementById('task-detail'),
+                taskDetailArea: document.getElementById('task-detail-area'),
+                taskListArea: document.getElementById('task-list-area')
+            });
+            
             // 加载任务列表
             this.loadTaskList();
-            
-            // 设置刷新按钮事件
-            document.getElementById('refresh-tasks').addEventListener('click', () => {
-                this.loadTaskList();
-            });
-            
-            // 任务详情返回按钮事件
-            document.getElementById('back-to-tasks').addEventListener('click', () => {
-                this.showTaskList();
-            });
             
             // 全局事件：当新任务完成时刷新任务列表
             document.addEventListener('task:complete', () => {
@@ -46,10 +59,22 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 创建任务管理界面
         createTaskUI: function() {
+            console.log("开始创建任务管理界面...");
+            
             // 确保任务管理界面已加载
             if (document.getElementById('task-manager-container')) {
+                console.log("任务管理界面已存在，不重复创建");
                 return;
             }
+            
+            // 获取任务管理标签页
+            const taskTab = document.getElementById('tasks-tab');
+            if (!taskTab) {
+                console.error('找不到任务管理标签页(#tasks-tab)，无法添加任务管理界面');
+                return;
+            }
+            
+            console.log("找到任务管理标签页，开始创建容器...");
             
             // 创建任务管理容器
             const container = document.createElement('div');
@@ -125,15 +150,61 @@ document.addEventListener('DOMContentLoaded', function() {
             container.appendChild(taskDetailArea);
             
             // 添加到任务管理标签页
-            const taskTab = document.getElementById('tasks-tab');
-            if (taskTab) {
-                taskTab.appendChild(container);
-            } else {
-                console.error('找不到任务管理标签页，无法添加任务管理界面');
-            }
+            taskTab.appendChild(container);
+            console.log("任务管理UI元素已添加到DOM");
             
             // 添加CSS样式
             this.addTaskManagerStyles();
+            
+            // 验证所有关键元素是否成功创建
+            const elementsCheck = {
+                container: document.getElementById('task-manager-container'),
+                listArea: document.getElementById('task-list-area'),
+                detailArea: document.getElementById('task-detail-area'),
+                taskList: document.getElementById('task-list'),
+                taskDetail: document.getElementById('task-detail'),
+                taskDetailLoading: document.getElementById('task-detail-loading'),
+                refreshButton: document.getElementById('refresh-tasks'),
+                backButton: document.getElementById('back-to-tasks')
+            };
+            
+            console.log("验证关键元素创建状态:", elementsCheck);
+            
+            // 检查是否有未创建的元素
+            const missingElements = Object.entries(elementsCheck)
+                .filter(([key, element]) => !element)
+                .map(([key]) => key);
+                
+            if (missingElements.length > 0) {
+                console.error(`任务管理UI创建失败，以下元素未找到: ${missingElements.join(', ')}`);
+            } else {
+                console.log("任务管理UI创建成功，所有关键元素已找到");
+                
+                // 成功创建UI后，添加事件监听器
+                try {
+                    // 刷新按钮事件
+                    const refreshBtn = document.getElementById('refresh-tasks');
+                    if (refreshBtn) {
+                        console.log("绑定刷新按钮事件");
+                        refreshBtn.addEventListener('click', () => {
+                            this.loadTaskList();
+                        });
+                    }
+                    
+                    // 返回按钮事件
+                    const backBtn = document.getElementById('back-to-tasks');
+                    if (backBtn) {
+                        console.log("绑定返回按钮事件");
+                        backBtn.addEventListener('click', () => {
+                            this.showTaskList();
+                        });
+                    }
+                    
+                    console.log("事件监听器绑定完成");
+                } catch (error) {
+                    console.error("绑定事件监听器时出错:", error);
+                }
+            }
         },
         
         // 添加任务管理样式
@@ -417,6 +488,47 @@ document.addEventListener('DOMContentLoaded', function() {
                     white-space: pre-wrap;
                     word-break: break-word;
                 }
+                
+                /* 错误消息样式 */
+                .error-message {
+                    padding: 20px;
+                    background-color: #fff0f0;
+                    border: 1px solid #ffcdd2;
+                    border-radius: 6px;
+                    text-align: center;
+                    margin: 20px 0;
+                }
+                
+                .error-message h3 {
+                    color: #d32f2f;
+                    margin-top: 0;
+                    margin-bottom: 15px;
+                }
+                
+                .error-message p {
+                    margin-bottom: 10px;
+                    color: #555;
+                }
+                
+                .error-actions {
+                    margin-top: 20px;
+                    display: flex;
+                    justify-content: center;
+                    gap: 10px;
+                }
+                
+                .retry-btn {
+                    padding: 6px 15px;
+                    background-color: #2196f3;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                }
+                
+                .retry-btn:hover {
+                    background-color: #1976d2;
+                }
             `;
             
             // 添加到文档头部
@@ -425,14 +537,62 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // 加载任务列表
         loadTaskList: async function() {
-            try {
-                // 显示加载状态
-                document.getElementById('task-list').style.display = 'none';
-                document.getElementById('task-list-empty').style.display = 'none';
-                document.getElementById('task-list-loading').style.display = 'flex';
+            console.log('开始加载任务列表');
+            
+            // 检查任务管理容器是否存在
+            const taskManagerContainer = document.getElementById('task-manager-container');
+            if (!taskManagerContainer) {
+                console.log('任务管理容器不存在，创建UI');
+                this.createTaskUI();
+                // 给DOM一点时间加载
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            // 获取任务列表元素
+            const taskList = document.getElementById('task-list');
+            const taskListEmpty = document.getElementById('task-list-empty');
+            const taskListLoading = document.getElementById('task-list-loading');
+            
+            if (!taskList || !taskListEmpty || !taskListLoading) {
+                console.error('找不到任务列表相关DOM元素:', {
+                    taskList,
+                    taskListEmpty,
+                    taskListLoading
+                });
                 
-                // 使用认证请求获取任务列表
-                const response = await window.Auth.fetchWithAuth('/tasks/');
+                // 如果元素不存在，再次尝试创建UI
+                this.createTaskUI();
+                return;
+            }
+            
+            // 显示加载状态
+            taskList.style.display = 'none';
+            taskListEmpty.style.display = 'none';
+            taskListLoading.style.display = 'flex';
+            
+            try {
+                // 直接尝试获取任务列表（不使用认证）
+                try {
+                    console.log('尝试直接获取任务列表...');
+                    const directResponse = await fetch('/api/tasks');
+                    
+                    if (directResponse.ok) {
+                        console.log('直接获取任务列表成功');
+                        const tasks = await directResponse.json();
+                        
+                        // 处理任务数据
+                        this.handleTasksData(tasks);
+                        return;
+                    } else {
+                        console.warn(`直接获取任务列表失败: ${directResponse.status}`);
+                    }
+                } catch (directError) {
+                    console.error('直接获取任务列表出错:', directError);
+                }
+                
+                // 备用方案：使用认证请求获取任务列表
+                console.log('尝试使用认证请求获取任务列表...');
+                const response = await window.Auth.fetchWithAuth('/api/tasks');
                 
                 // 如果认证进行中，不进行后续处理
                 if (response._auth_in_progress) {
@@ -446,26 +606,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 const tasks = await response.json();
                 
-                // 隐藏加载状态
-                document.getElementById('task-list-loading').style.display = 'none';
-                
-                // 显示任务列表或空提示
-                if (tasks.length === 0) {
-                    document.getElementById('task-list-empty').style.display = 'block';
-                    document.getElementById('task-list').style.display = 'none';
-                } else {
-                    document.getElementById('task-list-empty').style.display = 'none';
-                    document.getElementById('task-list').style.display = 'block';
-                    
-                    // 渲染任务列表
-                    this.renderTaskList(tasks);
-                }
+                // 处理任务数据
+                this.handleTasksData(tasks);
             } catch (error) {
                 console.error('加载任务列表失败:', error);
-                document.getElementById('task-list-loading').style.display = 'none';
-                document.getElementById('task-list-empty').textContent = `加载失败: ${error.message}`;
+                taskListLoading.style.display = 'none';
+                taskListEmpty.textContent = `加载失败: ${error.message}`;
+                taskListEmpty.style.display = 'block';
+                taskList.style.display = 'none';
+            }
+        },
+        
+        // 处理任务数据
+        handleTasksData: function(tasks) {
+            // 隐藏加载状态
+            document.getElementById('task-list-loading').style.display = 'none';
+            
+            // 显示任务列表或空提示
+            if (!tasks || tasks.length === 0) {
                 document.getElementById('task-list-empty').style.display = 'block';
                 document.getElementById('task-list').style.display = 'none';
+                document.getElementById('task-list-empty').textContent = '暂无任务记录';
+            } else {
+                document.getElementById('task-list-empty').style.display = 'none';
+                document.getElementById('task-list').style.display = 'block';
+                
+                console.log(`成功加载 ${tasks.length} 条任务记录`);
+                
+                // 渲染任务列表
+                this.renderTaskList(tasks);
             }
         },
         
@@ -521,6 +690,129 @@ document.addEventListener('DOMContentLoaded', function() {
         // 显示任务详情
         showTaskDetail: async function(taskId) {
             try {
+                console.log(`正在加载任务详情: ID=${taskId}`);
+                
+                // 确保任务管理容器存在
+                const taskManagerContainer = document.getElementById('task-manager-container');
+                if (!taskManagerContainer) {
+                    console.error('找不到任务管理容器，正在创建UI');
+                    this.createTaskUI();
+                    // 给DOM一点时间加载
+                    await new Promise(resolve => setTimeout(resolve, 800));
+                }
+                
+                // 再次检查必要的DOM元素是否存在
+                const taskDetailArea = document.getElementById('task-detail-area');
+                const taskListArea = document.getElementById('task-list-area');
+                const taskDetail = document.getElementById('task-detail');
+                const taskDetailLoading = document.getElementById('task-detail-loading');
+                
+                console.log('任务详情相关DOM元素状态:', {
+                    taskManagerContainer: !!document.getElementById('task-manager-container'),
+                    taskDetailArea: !!taskDetailArea,
+                    taskListArea: !!taskListArea,
+                    taskDetail: !!taskDetail,
+                    taskDetailLoading: !!taskDetailLoading
+                });
+                
+                // 如果元素不存在，尝试多次创建UI
+                if (!taskDetailArea || !taskDetail || !taskDetailLoading) {
+                    console.error('找不到任务详情相关DOM元素，尝试修复');
+                    
+                    // 尝试获取tasks-tab元素
+                    const tasksTab = document.getElementById('tasks-tab');
+                    if (!tasksTab) {
+                        console.error('找不到tasks-tab元素，无法创建任务详情UI');
+                        
+                        // 使用回退方案：在页面主体创建一个临时任务详情区域
+                        const tempContainer = document.createElement('div');
+                        tempContainer.id = 'temp-task-detail';
+                        tempContainer.style.padding = '20px';
+                        tempContainer.innerHTML = `
+                            <div class="task-detail-header">
+                                <button onclick="location.href='/tasks'">返回任务列表</button>
+                                <h2>任务详情 #${taskId}</h2>
+                            </div>
+                            <div id="temp-task-content">
+                                <div class="loading">正在加载中...</div>
+                            </div>
+                        `;
+                        
+                        // 添加到页面
+                        document.body.appendChild(tempContainer);
+                        
+                        // 直接使用fetchTaskDetail获取任务详情
+                        fetch(`/api/tasks/${taskId}`)
+                            .then(response => response.json())
+                            .then(task => {
+                                const content = document.getElementById('temp-task-content');
+                                if (content) {
+                                    content.innerHTML = `
+                                        <div class="task-info">
+                                            <div>任务ID: ${task.id}</div>
+                                            <div>状态: ${task.status}</div>
+                                            <div>创建时间: ${new Date(task.created_at).toLocaleString()}</div>
+                                            <div>提示词: ${task.prompt}</div>
+                                        </div>
+                                    `;
+                                }
+                            })
+                            .catch(err => {
+                                const content = document.getElementById('temp-task-content');
+                                if (content) {
+                                    content.innerHTML = `<div class="error">加载失败: ${err.message}</div>`;
+                                }
+                            });
+                        
+                        return;
+                    }
+                    
+                    // 尝试强制重建UI
+                    this.createTaskUI();
+                    
+                    // 给DOM加载留出更多时间
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    // 重新检查元素
+                    const refreshedTaskDetailArea = document.getElementById('task-detail-area');
+                    const refreshedTaskDetail = document.getElementById('task-detail');
+                    const refreshedTaskDetailLoading = document.getElementById('task-detail-loading');
+                    
+                    if (!refreshedTaskDetailArea || !refreshedTaskDetail || !refreshedTaskDetailLoading) {
+                        console.error('重建UI后仍无法找到任务详情DOM元素，尝试使用传统方式加载');
+                        
+                        if (typeof loadTaskDetail === 'function') {
+                            // 如果存在传统的loadTaskDetail函数，使用它
+                            console.log('使用传统loadTaskDetail函数加载任务详情');
+                            window.TaskManager = null; // 临时禁用TaskManager
+                            loadTaskDetail(taskId);
+                            return;
+                        }
+                        
+                        // 如果仍然无法处理，显示错误信息
+                        try {
+                            // 获取当前标签页内容区
+                            const taskTab = document.getElementById('tasks-tab');
+                            if (taskTab) {
+                                taskTab.innerHTML = `
+                                    <div class="error-message">
+                                        <h3>界面加载错误</h3>
+                                        <p>无法加载任务详情界面，请刷新页面或尝试重新登录</p>
+                                        <div class="error-actions">
+                                            <button onclick="location.reload()">刷新页面</button>
+                                            <button onclick="location.href='/tasks'">返回任务列表</button>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                        } catch (uiError) {
+                            console.error('显示错误信息失败:', uiError);
+                            alert('无法加载任务详情界面，请刷新页面后重试');
+                        }
+                        return;
+                    }
+                }
+                
                 // 更新当前任务ID
                 this.currentTaskId = taskId;
                 
@@ -535,15 +827,54 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
                 
                 // 显示详情区域，隐藏列表区域（在小屏幕上）
-                document.getElementById('task-list-area').classList.add('hidden-xs');
-                document.getElementById('task-detail-area').classList.remove('hidden');
+                const taskDetailAreaElement = document.getElementById('task-detail-area');
+                const taskListAreaElement = document.getElementById('task-list-area');
+                
+                if (taskListAreaElement) taskListAreaElement.classList.add('hidden-xs');
+                if (taskDetailAreaElement) taskDetailAreaElement.classList.remove('hidden');
+                
+                // 获取任务详情元素
+                const taskDetailElement = document.getElementById('task-detail');
+                const taskDetailLoadingElement = document.getElementById('task-detail-loading');
+                
+                if (!taskDetailElement || !taskDetailLoadingElement) {
+                    console.error('找不到任务详情或加载状态元素');
+                    alert('无法显示任务详情，请刷新页面后重试');
+                    return;
+                }
                 
                 // 显示加载状态
-                document.getElementById('task-detail').style.display = 'none';
-                document.getElementById('task-detail-loading').style.display = 'flex';
+                taskDetailElement.style.display = 'none';
+                taskDetailLoadingElement.style.display = 'flex';
                 
-                // 使用认证请求获取任务详情
-                const response = await window.Auth.fetchWithAuth(`/api/tasks/${taskId}`);
+                // 尝试直接获取任务详情（不使用认证请求）
+                try {
+                    // 使用新的API端点避免参数冲突问题
+                    console.log(`尝试直接获取任务详情: /api/task_detail?task_id=${taskId}`);
+                    const directResponse = await fetch(`/api/task_detail?task_id=${taskId}`);
+                    
+                    if (directResponse.ok) {
+                        const task = await directResponse.json();
+                        console.log('任务详情获取成功:', task);
+                        
+                        // 隐藏加载状态
+                        taskDetailLoadingElement.style.display = 'none';
+                        taskDetailElement.style.display = 'block';
+                        
+                        // 渲染任务详情
+                        this.renderTaskDetail(task);
+                        return;
+                    } else {
+                        console.warn(`直接获取任务详情失败: ${directResponse.status} ${directResponse.statusText}`);
+                    }
+                } catch (directError) {
+                    console.error('直接获取任务详情出错:', directError);
+                }
+                
+                // 如果直接获取失败，尝试使用认证请求获取任务详情
+                console.log('尝试使用认证请求获取任务详情');
+                // 使用新的API端点避免参数冲突问题
+                const response = await window.Auth.fetchWithAuth(`/api/task_detail?task_id=${taskId}`);
                 
                 // 如果认证进行中，不进行后续处理
                 if (response._auth_in_progress) {
@@ -558,16 +889,71 @@ document.addEventListener('DOMContentLoaded', function() {
                 const task = await response.json();
                 
                 // 隐藏加载状态
-                document.getElementById('task-detail-loading').style.display = 'none';
-                document.getElementById('task-detail').style.display = 'block';
+                taskDetailLoadingElement.style.display = 'none';
+                taskDetailElement.style.display = 'block';
                 
                 // 渲染任务详情
                 this.renderTaskDetail(task);
             } catch (error) {
                 console.error('加载任务详情失败:', error);
-                document.getElementById('task-detail-loading').style.display = 'none';
-                alert(`加载任务详情失败: ${error.message}`);
-                this.showTaskList();
+                taskDetailLoadingElement.style.display = 'none';
+                
+                // 根据错误类型显示不同的提示
+                if (error.message && error.message.includes('404')) {
+                    // 任务不存在
+                    taskDetailElement.innerHTML = `
+                        <div class="error-message">
+                            <h3>任务不存在</h3>
+                            <p>该任务可能已被删除，或日志文件未上传成功</p>
+                            <p>错误详情: ${error.message}</p>
+                            <div class="error-actions">
+                                <button class="back-btn" id="back-to-tasks">返回任务列表</button>
+                                <button class="retry-btn" id="retry-load-task">重试加载</button>
+                            </div>
+                        </div>
+                    `;
+                } else if (error.message && error.message.includes('500')) {
+                    // 服务器错误
+                    taskDetailElement.innerHTML = `
+                        <div class="error-message">
+                            <h3>服务器错误</h3>
+                            <p>加载任务详情时遇到服务器错误，请稍后重试</p>
+                            <p>错误详情: ${error.message}</p>
+                            <div class="error-actions">
+                                <button class="back-btn" id="back-to-tasks">返回任务列表</button>
+                                <button class="retry-btn" id="retry-load-task">重试加载</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // 其他错误
+                    taskDetailElement.innerHTML = `
+                        <div class="error-message">
+                            <h3>加载失败</h3>
+                            <p>无法加载任务详情</p>
+                            <p>错误详情: ${error.message}</p>
+                            <div class="error-actions">
+                                <button class="back-btn" id="back-to-tasks">返回任务列表</button>
+                                <button class="retry-btn" id="retry-load-task">重试加载</button>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                taskDetailElement.style.display = 'block';
+                
+                // 重新绑定返回按钮事件
+                document.getElementById('back-to-tasks').addEventListener('click', () => {
+                    this.showTaskList();
+                });
+                
+                // 重新绑定重试按钮事件
+                const retryBtn = document.getElementById('retry-load-task');
+                if (retryBtn) {
+                    retryBtn.addEventListener('click', () => {
+                        this.showTaskDetail(this.currentTaskId);
+                    });
+                }
             }
         },
         
@@ -755,8 +1141,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     downloadBtn.disabled = true;
                     
                     try {
-                        // 构建下载URL
-                        const downloadUrl = `/api/tasks/${taskId}/files/${fileId}/download`;
+                        // 构建下载URL - 修正路径
+                        const downloadUrl = `/api/files/${fileId}/download`;
+                        
+                        console.log(`开始下载文件: ${filename}, 文件ID: ${fileId}, 使用URL: ${downloadUrl}`);
                         
                         // 使用认证请求获取文件
                         const response = await window.Auth.fetchWithAuth(downloadUrl, {
@@ -814,4 +1202,4 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 导出到全局
     window.TaskManager = TaskManager;
-}); 
+} 

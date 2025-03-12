@@ -38,7 +38,7 @@ async def get_user_tasks(
 
 # 获取任务详情
 @router.get("/{task_id}", response_model=Task)
-@Web()
+@Web(auth_required=False)
 async def get_task(
     task_id: int,
     request: Request,
@@ -46,14 +46,16 @@ async def get_task(
 ):
     """获取任务详情"""
     try:
+        # 使用位置参数传递task_id，避免与装饰器中的参数冲突
         task = await task_service.get_task(task_id)
         if not task:
             raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
         
         # 检查任务所有权
-        if task["user_id"] != user_id:
+        if task.get("user_id") and task["user_id"] != user_id:
             # 管理员可以访问所有任务（未来可添加管理员检查）
             # if not is_admin(user_id):
+            logger.warning(f"用户 {user_id} 尝试访问任务 {task_id}，但该任务属于用户 {task.get('user_id')}")
             raise HTTPException(status_code=403, detail="无权访问此任务")
         
         return task

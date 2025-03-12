@@ -413,5 +413,17 @@ async def main():
     server = uvicorn.Server(config)
     await server.serve()
 
+# 主入口
 if __name__ == "__main__":
+    # 显示数据库配置
+    from app.config.database import DatabaseConfig
+    print("\n数据库配置信息:")
+    print(f"主机: {DatabaseConfig.HOST}")
+    print(f"端口: {DatabaseConfig.PORT}")
+    print(f"用户: {DatabaseConfig.USER}")
+    print(f"数据库: {DatabaseConfig.DATABASE}")
+    print(f"字符集: {DatabaseConfig.CHARSET}")
+    print("-" * 40)
+    
+    # 启动应用
     asyncio.run(main())

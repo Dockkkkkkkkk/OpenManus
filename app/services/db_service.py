@@ -40,42 +40,23 @@ class DBService:
             # 获取连接参数
             params = DatabaseConfig.get_connection_params()
             
-            # 处理可能的编码密码
-            if params['password'].startswith('b64:'):
-                import base64
-                # 提取编码部分并解码
-                encoded_part = params['password'][4:]  # 移除 'b64:' 前缀
-                try:
-                    params['password'] = base64.b64decode(encoded_part).decode('utf-8')
-                    logger.debug("成功解码数据库密码")
-                except Exception as decode_err:
-                    logger.error(f"密码解码失败: {str(decode_err)}")
-                    # 如果解码失败，使用一个安全的默认密码
-                    params['password'] = "password"
-            
-            # 避免打印密码，创建一个不含密码的副本用于日志
-            log_params = {k: v for k, v in params.items() if k != 'password'}
-            log_params['password'] = '******'  # 用星号掩盖密码
-            logger.debug(f"数据库连接参数: {log_params}")
-            
             # 处理cursorclass参数
             if params.get('cursorclass') == 'DictCursor':
                 params['cursorclass'] = DictCursor
             
-            # 修改连接方式，避免latin-1编码问题
+            # 记录连接尝试（不含密码）
+            conn_info = {k: v for k, v in params.items() if k != 'password'}
+            logger.debug(f"尝试连接数据库: {conn_info}")
+            
+            # 使用干净的连接参数
             conn = pymysql.connect(
-                host=params['host'],
-                port=params['port'],
-                user=params['user'],
-                password=params['password'],
-                database=params['database'],
-                charset=params['charset'],
-                use_unicode=True,
-                init_command="SET NAMES utf8mb4",
-                cursorclass=params['cursorclass'] if 'cursorclass' in params else DictCursor,
-                # 禁用内部latin-1编码转换
-                binary_prefix=True
+                **params,
+                connect_timeout=10,  # 设置连接超时
+                client_flag=pymysql.constants.CLIENT.MULTI_STATEMENTS,  # 启用多语句支持
+                conv=pymysql.converters.conversions,  # 使用默认转换器
+                autocommit=True  # 自动提交
             )
+            logger.debug("数据库连接成功")
             return conn
         except UnicodeEncodeError as ue:
             logger.error(f"数据库连接编码错误: {str(ue)}")
@@ -138,33 +119,45 @@ class DBService:
     def _ensure_database_exists(self):
         """确保数据库存在，如果不存在则创建"""
         try:
-            # 打印连接参数（不包含密码）
-            logger.info(f"尝试连接数据库服务器: {DatabaseConfig.HOST}:{DatabaseConfig.PORT}, 用户: {DatabaseConfig.USER}")
+            # 获取数据库主机信息
+            host = DatabaseConfig.HOST
+            port = DatabaseConfig.PORT
+            user = DatabaseConfig.USER
+            
+            # 构建不带数据库名的连接参数
+            params = DatabaseConfig.get_connection_params()
+            params.pop('database', None)  # 移除数据库名
+            
+            if 'init_command' in params:
+                params.pop('init_command')  # 移除初始化命令
+            
+            logger.info(f"尝试连接数据库服务器: {host}:{port}, 用户: {user}")
+            
+            # 处理cursorclass参数
+            if params.get('cursorclass') == 'DictCursor':
+                params['cursorclass'] = DictCursor
             
             # 不指定数据库名连接到MySQL服务器
-            conn = pymysql.connect(
-                host=DatabaseConfig.HOST,
-                port=DatabaseConfig.PORT,
-                user=DatabaseConfig.USER,
-                password=DatabaseConfig.PASSWORD,
-                charset=DatabaseConfig.CHARSET
-            )
+            conn = pymysql.connect(**params)
+            
             try:
-                cursor = conn.cursor()
-                # 检查数据库是否存在
-                cursor.execute(f"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{DatabaseConfig.DATABASE}'")
-                result = cursor.fetchone()
-                
-                if not result:
-                    # 创建数据库
-                    cursor.execute(f"CREATE DATABASE {DatabaseConfig.DATABASE} DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci")
-                    logger.info(f"创建数据库成功: {DatabaseConfig.DATABASE}")
-                else:
-                    logger.info(f"数据库已存在: {DatabaseConfig.DATABASE}")
+                database_name = DatabaseConfig.DATABASE
+                with conn.cursor() as cursor:
+                    # 检查数据库是否存在
+                    cursor.execute(f"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = %s", (database_name,))
+                    result = cursor.fetchone()
+                    
+                    if not result:
+                        # 创建数据库
+                        cursor.execute(f"CREATE DATABASE {database_name} DEFAULT CHARACTER SET utf8mb4 DEFAULT COLLATE utf8mb4_unicode_ci")
+                        logger.info(f"创建数据库成功: {database_name}")
+                    else:
+                        logger.info(f"数据库已存在: {database_name}")
             finally:
                 conn.close()
         except Exception as e:
             logger.error(f"检查/创建数据库失败: {str(e)}")
+            logger.error(traceback.format_exc())
             raise
     
     def _init_tables_manually(self):
@@ -251,31 +244,68 @@ class DBService:
     
     def get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
         """获取单个任务详情"""
-        conn = self.get_connection()
         try:
-            cursor = conn.cursor()
+            conn = self.get_connection()
+            cursor = None
             
-            # 获取任务信息
-            cursor.execute('SELECT * FROM tasks WHERE id = %s', (task_id,))
-            task = cursor.fetchone()
-            
-            if not task:
-                return None
-            
-            # 获取任务文件
-            cursor.execute('SELECT * FROM files WHERE task_id = %s', (task_id,))
-            files = cursor.fetchall()
-            
-            # 将结果转换为字典
-            task_dict = dict(task)
-            task_dict['files'] = [dict(file) for file in files]
-            
-            return task_dict
-        except Exception as e:
-            logger.error(f"获取任务失败: {str(e)}")
-            raise
-        finally:
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                
+                # 获取任务信息
+                logger.info(f"正在从数据库获取任务: ID={task_id}")
+                cursor.execute('SELECT * FROM tasks WHERE id = %s', (task_id,))
+                task = cursor.fetchone()
+                
+                if not task:
+                    logger.warning(f"未找到任务: ID={task_id}")
+                    return None
+                
+                # 获取任务文件
+                logger.info(f"正在获取任务文件: 任务ID={task_id}")
+                cursor.execute('SELECT * FROM files WHERE task_id = %s', (task_id,))
+                files = cursor.fetchall()
+                
+                # 将结果转换为字典
+                if isinstance(task, dict):
+                    task_dict = task
+                else:
+                    # 如果使用的不是DictCursor，手动转换
+                    try:
+                        task_dict = dict(task)
+                    except Exception as e:
+                        logger.error(f"无法将任务转换为字典: {str(e)}")
+                        # 创建基本字典
+                        field_names = [desc[0] for desc in cursor.description]
+                        task_dict = dict(zip(field_names, task))
+                
+                # 处理文件
+                if files:
+                    if isinstance(files[0], dict):
+                        task_dict['files'] = files
+                    else:
+                        # 手动转换文件列表
+                        try:
+                            cursor.execute('SHOW COLUMNS FROM files')
+                            file_fields = [col[0] for col in cursor.fetchall()]
+                            task_dict['files'] = [dict(zip(file_fields, file)) for file in files]
+                        except Exception as e:
+                            logger.error(f"无法转换文件列表: {str(e)}")
+                            task_dict['files'] = []
+                else:
+                    task_dict['files'] = []
+                
+                logger.info(f"成功获取任务及其{len(task_dict.get('files', []))}个文件: ID={task_id}")
+                return task_dict
+            except Exception as e:
+                logger.error(f"获取任务失败，数据库错误: {str(e)}")
+                return {"id": task_id, "error": f"获取任务失败: {str(e)}", "status": "error", "files": []}
+            finally:
+                if cursor:
+                    cursor.close()
+                conn.close()
+        except Exception as conn_err:
+            logger.error(f"获取任务失败，连接错误: {str(conn_err)}")
+            return {"id": task_id, "error": f"数据库连接失败: {str(conn_err)}", "status": "error", "files": []}
     
     def get_user_tasks(self, user_id: str, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         """获取用户的任务列表"""
@@ -437,17 +467,21 @@ class DBService:
             cursor = conn.cursor()
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
+            logger.info(f"添加文件记录: 任务ID={task_id}, 文件名={filename}")
+            
             cursor.execute(
                 'INSERT INTO files (task_id, filename, cos_url, content_type, created_at) VALUES (%s, %s, %s, %s, %s)',
                 (task_id, filename, file_url, content_type, now)
             )
             file_id = cursor.lastrowid
             conn.commit()
+            
+            logger.info(f"文件记录添加成功: ID={file_id}")
             return file_id
         except Exception as e:
             conn.rollback()
             logger.error(f"添加文件记录失败: {str(e)}")
-            return 0
+            raise  # 改为抛出异常，便于调用方处理错误
         finally:
             conn.close()
     

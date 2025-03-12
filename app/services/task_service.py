@@ -666,5 +666,112 @@ class TaskService:
             logger.error(f"删除任务失败: {str(e)}")
             raise
 
+    async def get_task_logs(self, task_id: int) -> List[Dict[str, Any]]:
+        """获取任务的日志列表"""
+        try:
+            logs = []
+            logger.debug(f"获取任务 {task_id} 的日志")
+            
+            # 如果数据库可用，从数据库获取任务信息
+            if db_service.db_available:
+                task = db_service.get_task(task_id)
+                if not task:
+                    logger.warning(f"获取日志失败：找不到任务 ID={task_id}")
+                    return []
+                    
+                # 如果任务有日志URL，尝试下载日志内容
+                if task.get('log_url'):
+                    try:
+                        log_content = await cos_service.download_file(task['log_url'])
+                        if log_content:
+                            # 将日志内容解析为日志项列表
+                            log_lines = log_content.strip().split('\n')
+                            for line in log_lines:
+                                if not line.strip():
+                                    continue
+                                    
+                                try:
+                                    # 尝试解析为JSON（如果是结构化日志）
+                                    import json
+                                    log_item = json.loads(line)
+                                    logs.append(log_item)
+                                except json.JSONDecodeError:
+                                    # 如果不是JSON，按普通文本处理
+                                    timestamp = datetime.now().isoformat()
+                                    if '[' in line and ']' in line:
+                                        # 尝试提取时间戳
+                                        try:
+                                            timestamp_str = line.split('[')[1].split(']')[0]
+                                            timestamp = datetime.fromisoformat(timestamp_str).isoformat()
+                                            message = line.split(']', 1)[1].strip()
+                                        except:
+                                            message = line
+                                    else:
+                                        message = line
+                                    
+                                    logs.append({
+                                        'timestamp': timestamp,
+                                        'level': 'info',
+                                        'message': message
+                                    })
+                    except Exception as e:
+                        logger.error(f"下载日志内容失败: {str(e)}")
+                        # 添加一个错误日志项
+                        logs.append({
+                            'timestamp': datetime.now().isoformat(),
+                            'level': 'error',
+                            'message': f"无法获取日志: {str(e)}"
+                        })
+            
+            # 如果数据库不可用或没有获取到日志，尝试从内存获取
+            if not logs and str(task_id) in self.in_memory_logs:
+                log_content = self.in_memory_logs[str(task_id)]
+                log_lines = log_content.strip().split('\n')
+                for line in log_lines:
+                    if not line.strip():
+                        continue
+                        
+                    # 简单解析日志行
+                    timestamp = datetime.now().isoformat()
+                    level = 'info'
+                    
+                    # 尝试提取级别和时间戳
+                    if '[' in line:
+                        parts = line.split('[')
+                        if len(parts) > 2:
+                            try:
+                                timestamp_str = parts[1].split(']')[0]
+                                timestamp = datetime.fromisoformat(timestamp_str).isoformat()
+                                if len(parts) > 3:
+                                    level_str = parts[2].split(']')[0].lower()
+                                    if level_str in ['info', 'error', 'warning', 'debug']:
+                                        level = level_str
+                                message = line.split(']', 2)[-1].strip()
+                            except:
+                                message = line
+                        else:
+                            message = line
+                    else:
+                        message = line
+                    
+                    logs.append({
+                        'timestamp': timestamp,
+                        'level': level,
+                        'message': message
+                    })
+            
+            # 确保日志按时间排序
+            logs.sort(key=lambda x: x.get('timestamp', ''), reverse=False)
+            
+            logger.debug(f"获取到 {len(logs)} 条日志")
+            return logs
+        except Exception as e:
+            logger.error(f"获取任务日志失败: {str(e)}")
+            return [{
+                'timestamp': datetime.now().isoformat(),
+                'level': 'error',
+                'message': f"获取日志时出错: {str(e)}"
+            }]
+
 # 创建单例实例
 task_service = TaskService() 
