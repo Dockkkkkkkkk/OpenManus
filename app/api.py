@@ -1259,33 +1259,66 @@ async def download_file(request: Request, file_id: int):
         )
 
 @app.get("/api/download/{file_name}")
-@Web()  # 默认需要认证
+@Web(auth_required=False)  # 默认需要认证
 async def download_file_query(request: Request, file_name: str):
-    """下载指定的文件（查询参数版本）"""
-    # 查找匹配的文件
-    matching_files = []
-    for f in generated_files:
-        if isinstance(f, str):
-            if os.path.basename(f) == file_name:
-                matching_files.append(f)
-        elif isinstance(f, dict) and f.get("name") == file_name:
-            matching_files.append(f.get("path"))
+    """通过文件名下载任务文件"""
+    import logging
+    logger = logging.getLogger(__name__)
     
-    if not matching_files:
-        raise HTTPException(status_code=404, detail=f"文件未找到: {file_name}")
+    # 获取任务ID
+    task_id = request.query_params.get("task_id")
     
-    file_path = matching_files[0]
+    if not task_id:
+        logger.warning(f"下载文件失败: 缺少task_id参数, 文件名={file_name}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少task_id参数"}
+        )
     
-    # 检查文件是否存在
-    if not os.path.isfile(file_path):
-        raise HTTPException(status_code=404, detail=f"文件不存在: {file_path}")
+    logger.info(f"尝试通过文件名下载文件: 文件名={file_name}, 任务ID={task_id}")
     
-    # 返回文件
-    return FileResponse(
-        path=file_path, 
-        filename=file_name,
-        media_type="application/octet-stream"
-    )
+    try:
+        # 获取任务的所有文件
+        files = await task_service.get_task_files(int(task_id))
+        
+        # 查找匹配的文件
+        target_file = None
+        for file in files:
+            if file.get("filename") == file_name:
+                target_file = file
+                break
+        
+        if not target_file:
+            logger.warning(f"文件不存在: 文件名={file_name}, 任务ID={task_id}")
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"在任务 {task_id} 中找不到文件 {file_name}"}
+            )
+        
+        # 获取文件URL
+        file_url = target_file.get("cos_url") or target_file.get("file_url")
+        
+        if file_url and file_url.startswith("http"):
+            logger.info(f"重定向到COS URL: {file_url}")
+            return RedirectResponse(file_url)
+        
+        # 如果没有URL，尝试通过ID获取完整文件信息
+        file_id = target_file.get("id")
+        if file_id:
+            return RedirectResponse(f"/api/files/{file_id}/download")
+        
+        logger.warning(f"无法获取文件下载链接: 文件名={file_name}, 任务ID={task_id}")
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"无法获取文件下载链接: {file_name}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"下载文件失败: 文件名={file_name}, 任务ID={task_id}, 错误: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"下载文件失败: {str(e)}"}
+        )
 
 @app.get("/api/history")
 @Web()  # 默认需要认证
@@ -2080,3 +2113,81 @@ def get_user_info(request: Request) -> dict:
     
     # 如果没有找到用户信息，返回空字典
     return {"username": "访客", "id": "guest"}
+
+@app.post("/api/task_detail/logs/download")
+@Web(auth_required=False)  # 暂时不要求认证，方便测试
+async def download_task_logs(request: Request):
+    """
+    下载任务日志文件
+    参数:
+    - task_id: 任务ID (从请求体中获取)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # 从请求体中获取task_id
+    try:
+        # 解析请求体
+        request_data = await request.json()
+    except Exception as e:
+        logger.error(f"解析请求体失败: {str(e)}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "无效的请求格式", "detail": str(e)}
+        )
+    
+    task_id = request_data.get("task_id")
+    if not task_id:
+        logger.warning("缺少task_id参数")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "缺少task_id参数"}
+        )
+
+    logger.info(f"下载任务日志: task_id={task_id}")
+    
+    # 获取任务信息
+    task = await task_service.get_task(int(task_id))
+    if not task:
+        logger.warning(f"任务不存在: task_id={task_id}")
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"任务不存在: {task_id}"}
+        )
+    
+    # 获取任务日志URL
+    log_url = task.get('log_url')
+    if not log_url:
+        logger.warning(f"任务没有日志文件: task_id={task_id}")
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"任务没有日志文件: {task_id}"}
+        )
+    
+    try:
+        # 下载日志文件
+        log_content = await cos_service.download_file(log_url)
+        if not log_content:
+            logger.warning(f"无法下载日志文件: URL={log_url}")
+            return JSONResponse(
+                status_code=404,
+                content={"error": "无法下载日志文件"}
+            )
+        
+        # 设置文件名
+        filename = f"task_{task_id}_log.txt"
+        
+        # 返回日志内容作为文件下载
+        return StreamingResponse(
+            iter([log_content]),
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        logger.error(f"下载日志文件失败: task_id={task_id}, 错误: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"下载日志文件失败: {str(e)}"}
+        )

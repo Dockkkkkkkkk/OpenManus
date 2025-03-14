@@ -1,23 +1,22 @@
 # Global LLM configuration
 [llm]
-model = "moonshot-v1-128k"
-base_url = "https://api.moonshot.cn/v1"
-api_key = "sk-gjtNABtUMdf6djV9uLFgEwRRrDtTaEBdRE7QKf3D2zMZDIaL"
+model = "gpt-4o-mini"
+base_url = "https://api.gptsapi.net/v1"
+api_key = "sk-Xxe89634a45eec201acedf3ee4572b4554dc3e83647hBnkG"
 max_tokens = 4096
 temperature = 0.0
 
 # Optional configuration for specific LLM models
 [llm.vision]
-model = "moonshot-v1-128k-vision-preview"
-base_url = "https://api.moonshot.cn/v1"
-api_key = "sk-gjtNABtUMdf6djV9uLFgEwRRrDtTaEBdRE7QKf3D2zMZDIaL"
+model = "gpt-4o-mini"
+base_url = "https://api.gptsapi.net/v1"
+api_key = "sk-Xxe89634a45eec201acedf3ee4572b4554dc3e83647hBnkG"
 
 # OpenAI configuration
 [openai]
-model = "moonshot-v1-128k"
-api_key = "sk-gjtNABtUMdf6djV9uLFgEwRRrDtTaEBdRE7QKf3D2zMZDIaL"
-api_base = "https://api.moonshot.cn/v1"
-
+model = "gpt-4o-mini"
+api_key = "sk-Xxe89634a45eec201acedf3ee4572b4554dc3e83647hBnkG"
+api_base = "https://api.gptsapi.net/v1"
 
 # OpenManus configuration
 [auth]

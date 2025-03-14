@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                         
                         <div class="task-logs-section">
-                            <h3>执行日志</h3>
+                            <h3>执行日志 <a href="javascript:void(0)" id="download-logs-btn" class="download-btn" style="font-size: 0.8rem; padding: 0.2rem 0.5rem; float: right; margin-right: 10px;">下载日志</a></h3>
                             <div id="task-logs-list" class="task-logs-list">
                                 <div class="loading">正在加载日志...</div>
                             </div>
@@ -330,31 +330,66 @@ document.addEventListener('DOMContentLoaded', function() {
                 const filesListElement = document.getElementById('task-files-list');
                 if (filesListElement) {
                     // 使用POST方法获取文件列表，通过请求体传递参数
-                    fetchGeneratedFiles(taskId)
-                        .then(files => {
+                    const postData = { task_id: taskId };
+                    console.log("发送请求获取文件列表:", postData);
+                    
+                    fetch(`/api/task_detail/files`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(postData)
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`获取文件列表失败: ${response.status}`);
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            // 从返回的数据中提取files数组
+                            const files = data.files || [];
+                            console.log("获取到文件列表:", files);
+                            
                             if (!files || files.length === 0) {
                                 filesListElement.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
                             } else {
                                 // 构建文件列表HTML
-                                const filesHtml = files.map(file => `
+                                const filesHtml = files.map(file => {
+                                    // 确保文件对象有id
+                                    const fileId = file.id || '';
+                                    // 创建下载链接，如果没有ID则使用文件名
+                                    const downloadUrl = fileId ? 
+                                        `/api/files/${fileId}/download` : 
+                                        `/api/download/${encodeURIComponent(file.filename)}?task_id=${taskId}`;
+                                        
+                                    return `
                                     <div class="file-item">
-                                        <div class="file-info">
+                                        <div class="file-info" onclick="viewFile('${file.filename}')">
                                             <div class="file-name">${file.filename}</div>
                                             <div class="file-meta">
                                                 <span class="file-size">${formatFileSize(file.size || 0)}</span>
                                                 <span class="file-date">${formatDate(file.created_at)}</span>
                                             </div>
                                         </div>
-                                        <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
+                                        <a href="${downloadUrl}" class="download-btn" download>下载</a>
                                     </div>
-                                `).join('');
+                                    `;
+                                }).join('');
                                 
                                 filesListElement.innerHTML = filesHtml;
+                                
+                                // 为所有下载按钮添加点击事件
+                                document.querySelectorAll('.download-btn').forEach(btn => {
+                                    btn.addEventListener('click', (e) => {
+                                        console.log('点击下载按钮', e.target.href);
+                                    });
+                                });
                             }
                         })
                         .catch(error => {
                             console.error('获取文件列表失败:', error);
-                            filesListElement.innerHTML = '<div class="error-message">获取文件列表失败</div>';
+                            filesListElement.innerHTML = `<div class="error-message">获取文件列表失败: ${error}</div>`;
                         });
                 }
                 
@@ -398,6 +433,51 @@ document.addEventListener('DOMContentLoaded', function() {
                             console.error('获取日志失败:', error);
                             logsListElement.innerHTML = `<div class="error-message">获取日志失败：${error}</div>`;
                         });
+                }
+                
+                // 设置下载日志按钮的事件处理
+                const downloadLogsBtn = document.getElementById('download-logs-btn');
+                if (downloadLogsBtn) {
+                    downloadLogsBtn.addEventListener('click', () => {
+                        console.log('点击下载日志按钮，任务ID:', taskId);
+                        
+                        // 显示加载消息
+                        showMessage('info', '正在下载日志文件...');
+                        
+                        // 发送请求下载日志
+                        fetch('/api/task_detail/logs/download', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({ task_id: taskId })
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`下载日志失败: ${response.status}`);
+                            }
+                            return response.blob();
+                        })
+                        .then(blob => {
+                            // 创建临时下载链接
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.style.display = 'none';
+                            a.href = url;
+                            a.download = `task_${taskId}_log.txt`;
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                            
+                            // 显示成功消息
+                            showMessage('success', '日志文件下载成功');
+                        })
+                        .catch(error => {
+                            console.error('下载日志失败:', error);
+                            showMessage('error', `下载日志失败: ${error.message}`);
+                        });
+                    });
                 }
             })
             .catch(error => {
@@ -650,7 +730,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         fileList.innerHTML = '<div class="empty-message">此任务暂无生成文件</div>';
                     } else {
                         // 构建文件列表HTML
-                        const filesHtml = files.map(file => `
+                        const filesHtml = files.map(file => {
+                            // 确保文件对象有id
+                            const fileId = file.id || '';
+                            // 创建下载链接，如果没有ID则使用文件名
+                            const downloadUrl = fileId ? 
+                                `/api/files/${fileId}/download` : 
+                                `/api/download/${encodeURIComponent(file.filename)}?task_id=${taskId}`;
+                            
+                            return `
                             <div class="file-item">
                                 <div class="file-info">
                                     <div class="file-name">${file.filename}</div>
@@ -659,11 +747,19 @@ document.addEventListener('DOMContentLoaded', function() {
                                         <span class="file-date">${formatDate(file.created_at)}</span>
                                     </div>
                                 </div>
-                                <a href="/api/files/${file.id}/download" class="download-btn" download>下载</a>
+                                <a href="${downloadUrl}" class="download-btn" download style="display:inline-block; padding:5px 10px; background:#007bff; color:white; text-decoration:none; border-radius:3px;">下载</a>
                             </div>
-                        `).join('');
+                            `;
+                        }).join('');
                         
                         fileList.innerHTML = filesHtml;
+                        
+                        // 为所有下载按钮添加点击事件
+                        document.querySelectorAll('.download-btn').forEach(btn => {
+                            btn.addEventListener('click', (e) => {
+                                console.log('点击下载按钮', e.target.href);
+                            });
+                        });
                     }
                 }
                 
