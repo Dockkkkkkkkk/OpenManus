@@ -419,6 +419,57 @@ class DBService:
         finally:
             conn.close()
     
+    def update_task(self, task_id: int, update_data: Dict[str, Any]) -> bool:
+        """更新任务的任意字段
+        
+        Args:
+            task_id: 任务ID
+            update_data: 要更新的字段及其值的字典，例如 {"status": "completed", "log_url": "http://..."}
+            
+        Returns:
+            bool: 更新是否成功
+        """
+        if not update_data:
+            return False
+            
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 构建更新语句
+            set_parts = []
+            params = []
+            
+            # 添加更新字段
+            for key, value in update_data.items():
+                set_parts.append(f"{key} = %s")
+                params.append(value)
+                
+            # 添加更新时间
+            set_parts.append("updated_at = %s")
+            params.append(now)
+            
+            # 添加任务ID
+            params.append(task_id)
+            
+            # 执行更新
+            query = f"UPDATE tasks SET {', '.join(set_parts)} WHERE id = %s"
+            logger.debug(f"执行更新任务: ID={task_id}, 查询={query}, 参数={params}")
+            
+            cursor.execute(query, params)
+            conn.commit()
+            
+            success = cursor.rowcount > 0
+            logger.info(f"更新任务成功: ID={task_id}, 受影响行数={cursor.rowcount}")
+            return success
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"更新任务失败: ID={task_id}, 错误={str(e)}")
+            raise
+        finally:
+            conn.close()
+    
     def delete_task(self, task_id: int) -> bool:
         """删除任务及其关联文件"""
         conn = self.get_connection()

@@ -1195,15 +1195,22 @@ async def download_file(request: Request, file_id: int):
     
     try:
         # 从文件服务或本地获取文件
-        file_data = await task_service.get_file(str(file_id))  # 确保转换为字符串
-        logger.debug(f"获取到文件数据: {file_data}")
+        file_id_str = str(file_id)  # 转换为字符串
+        file_data = await task_service.get_file(file_id_str)
         
+        if not file_data:
+            # 如果使用字符串ID找不到，尝试使用整数ID
+            file_data = await task_service.get_file(file_id)
+            
         if not file_data:
             logger.warning(f"文件不存在: ID={file_id}")
             return JSONResponse(
                 status_code=404, 
                 content={"error": f"文件不存在 ID={file_id}"}
             )
+            
+        # 记录找到的文件数据
+        logger.debug(f"获取到文件数据: {file_data}")
             
         # 文件信息
         filename = file_data.get("filename", f"file_{file_id}")
@@ -1814,127 +1821,217 @@ async def get_task_logs(request: Request):
     
     # 记录用户信息和请求
     user_info = get_user_info(request)
-    logger.info(f"访问任务日志API: 用户={user_info.get('username', '未知')}")
+    user_name = user_info.get('username', '访客')
+    logger.info(f"访问任务日志API: 用户={user_name}")
+    
+    # 尝试从请求体获取task_id
+    task_id = None
     
     try:
-        # 解析请求体
-        request_data = await request.json()
-        logger.debug(f"请求体数据: {request_data}")
-    except Exception as e:
-        logger.error(f"解析请求体失败: {str(e)}")
-        return JSONResponse(
-            status_code=400,
-            content={"error": "无效的请求格式", "detail": str(e)}
-        )
-    
-    # 从请求体中获取task_id
-    task_id = request_data.get("task_id")
-    if not task_id:
-        logger.warning("缺少task_id参数")
-        return JSONResponse(
-            status_code=400,
-            content={"error": "缺少task_id参数"}
-        )
-    
-    # 记录日志查询信息
-    logger.info(f"获取任务日志: task_id={task_id}")
-    
-    # 验证任务是否存在
-    task = await task_service.get_task(task_id)
-    if not task:
-        logger.warning(f"任务不存在: task_id={task_id}")
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"任务不存在: {task_id}"}
-        )
-    
-    # 获取任务日志
-    try:
-        logs = await task_service.get_task_logs(task_id)
+        # 先尝试解析JSON请求体
+        try:
+            request_data = await request.json()
+            task_id = request_data.get("task_id")
+            logger.debug(f"从请求体获取到task_id: {task_id}")
+        except Exception:
+            # 如果请求体解析失败，尝试从查询参数获取
+            task_id = request.query_params.get("task_id")
+            logger.debug(f"从查询参数获取到task_id: {task_id}")
+            
+        # 如果仍未获取到task_id，尝试从表单数据获取
+        if not task_id:
+            try:
+                form_data = await request.form()
+                task_id = form_data.get("task_id")
+                logger.debug(f"从表单数据获取到task_id: {task_id}")
+            except Exception:
+                pass
         
-        # 格式化日期时间为ISO格式
-        if logs and isinstance(logs, list):
+        # 如果所有方法都无法获取task_id，则返回错误
+        if not task_id:
+            logger.warning("缺少task_id参数")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "缺少task_id参数", "detail": "请在请求体或URL参数中提供task_id"}
+            )
+    
+        # 记录日志查询信息
+        logger.info(f"获取任务日志: task_id={task_id}")
+        
+        # 验证任务是否存在
+        try:
+            task = await task_service.get_task(int(task_id))
+            if not task:
+                logger.warning(f"任务不存在: task_id={task_id}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"任务不存在: {task_id}"}
+                )
+        except ValueError as e:
+            logger.error(f"任务ID格式错误: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"任务ID必须是整数: {task_id}"}
+            )
+        
+        # 获取任务日志
+        try:
+            # 确保传递的是整数类型的task_id
+            task_id_int = int(task_id) if not isinstance(task_id, int) else task_id
+            
+            logs = await task_service.get_task_logs(task_id_int)
+            
+            # 确保返回的logs是一个列表
+            if logs is None:
+                logs = []
+            
+            # 处理日志内容并格式化
+            processed_logs = []
+            
             for log in logs:
-                if "timestamp" in log and log["timestamp"]:
-                    if isinstance(log["timestamp"], datetime):
-                        log["timestamp"] = log["timestamp"].isoformat()
-        
-        logger.info(f"成功获取任务日志: task_id={task_id}, 日志数量={len(logs) if logs else 0}")
-        return {"logs": logs or []}
+                processed_log = log.copy() if isinstance(log, dict) else {"message": str(log), "level": "info", "timestamp": datetime.now().isoformat()}
+                
+                # 处理特殊的错误消息格式，比如RetryError[]
+                if isinstance(processed_log.get("message"), str) and "RetryError" in processed_log["message"]:
+                    # 提取更有用的错误信息
+                    processed_log["message"] = "任务执行出错: API请求频率超限 (Rate limit exceeded)"
+                    processed_log["level"] = "error"
+                
+                # 格式化时间戳
+                if "timestamp" in processed_log and processed_log["timestamp"]:
+                    if isinstance(processed_log["timestamp"], datetime):
+                        processed_log["timestamp"] = processed_log["timestamp"].isoformat()
+                
+                processed_logs.append(processed_log)
+            
+            # 如果没有日志，添加一个默认消息
+            if not processed_logs:
+                processed_logs.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "info",
+                    "message": "暂无日志记录"
+                })
+            
+            logger.info(f"成功获取任务日志: task_id={task_id}, 日志数量={len(processed_logs)}")
+            return {"logs": processed_logs}
+            
+        except Exception as e:
+            logger.error(f"获取任务日志失败: task_id={task_id}, 错误: {str(e)}", exc_info=True)
+            
+            # 返回带有错误信息的响应，但确保前端能正常显示
+            return {
+                "logs": [{
+                    "timestamp": datetime.now().isoformat(),
+                    "level": "error",
+                    "message": f"获取日志时出错: {str(e)}"
+                }]
+            }
     except Exception as e:
-        logger.error(f"获取任务日志失败: task_id={task_id}, 错误: {str(e)}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"error": f"获取任务日志失败: {str(e)}"}
-        )
+        logger.error(f"处理任务日志请求失败: {str(e)}", exc_info=True)
+        
+        # 即使出错也返回可显示的日志信息
+        return {
+            "logs": [{
+                "timestamp": datetime.now().isoformat(),
+                "level": "error",
+                "message": f"处理日志请求时出错: {str(e)}"
+            }]
+        }
 
-# 新增使用请求体参数的任务文件获取路由 - 配合task_detail端点
 @app.post("/api/task_detail/files")
 @Web(auth_required=False)
 async def get_task_files_by_id(request: Request):
-    """获取任务的文件列表（通过请求体）- 配合task_detail端点使用"""
+    """
+    获取任务的文件列表（通过请求体）- 配合task_detail端点使用
+    参数:
+    - task_id: 任务ID (从请求体中获取)
+    """
     import logging
     logger = logging.getLogger(__name__)
     
-    # 从请求体中获取task_id
-    try:
-        body = await request.json()
-        task_id = body.get('task_id')
-    except Exception as e:
-        logger.error(f"解析请求体出错: {str(e)}")
-        return JSONResponse(
-            status_code=400,
-            content={"error": "无效的请求体格式，需要JSON格式"}
-        )
+    # 记录用户信息和请求
+    user_info = get_user_info(request)
+    user_name = user_info.get('username', '访客')
+    logger.info(f"通过请求体请求获取任务文件: 用户={user_name}")
     
-    if not task_id:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "缺少任务ID参数"}
-        )
+    # 尝试从请求体获取task_id
+    task_id = None
     
-    logger.info(f"通过请求体请求获取任务文件: ID={task_id}")
     try:
-        # 从请求状态中获取用户信息
-        user_info = getattr(request.state, "user", None)
-        user_id = user_info.get("user_id", "test_user") if user_info else "test_user"
-        logger.debug(f"当前用户: {user_id}, 请求任务文件ID: {task_id}")
-        
-        # 确保任务存在
-        task = await task_service.get_task(int(task_id))
-        if not task:
-            logger.warning(f"任务不存在: ID={task_id}")
-            return JSONResponse(
-                {"error": f"找不到任务: {task_id}"},
-                status_code=404
-            )
-        
-        # 直接调用获取文件的方法，避免通过task获取
-        files = await task_service.get_task_files(int(task_id))
-        logger.debug(f"获取到文件列表: {files}")
-        
-        if files is None:
-            logger.warning(f"找不到任务文件: ID={task_id}")
-            return JSONResponse(
-                {"error": f"找不到任务文件: {task_id}"},
-                status_code=404
-            )
+        # 先尝试解析JSON请求体
+        try:
+            request_data = await request.json()
+            task_id = request_data.get("task_id")
+            logger.debug(f"从请求体获取到task_id: {task_id}")
+        except Exception:
+            # 如果请求体解析失败，尝试从查询参数获取
+            task_id = request.query_params.get("task_id")
+            logger.debug(f"从查询参数获取到task_id: {task_id}")
             
-        # 确保文件列表不为None
-        files = files or []
+        # 如果仍未获取到task_id，尝试从表单数据获取
+        if not task_id:
+            try:
+                form_data = await request.form()
+                task_id = form_data.get("task_id")
+                logger.debug(f"从表单数据获取到task_id: {task_id}")
+            except Exception:
+                pass
         
-        # 将日期时间对象转换为字符串
-        for file in files:
-            if "created_at" in file and isinstance(file["created_at"], datetime):
-                file["created_at"] = file["created_at"].isoformat()
+        # 如果所有方法都无法获取task_id，则返回错误
+        if not task_id:
+            logger.warning("缺少task_id参数")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "缺少task_id参数", "detail": "请在请求体或URL参数中提供task_id"}
+            )
         
-        logger.info(f"成功获取任务文件列表: ID={task_id}, 文件数量={len(files)}")
-        return files
+        # 记录文件查询信息
+        logger.info(f"通过请求体请求获取任务文件: ID={task_id}")
+        
+        # 验证任务是否存在
+        try:
+            task = await task_service.get_task(int(task_id))
+            if not task:
+                logger.warning(f"任务不存在: task_id={task_id}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": f"任务不存在: {task_id}"}
+                )
+        except ValueError as e:
+            logger.error(f"任务ID格式错误: {str(e)}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"任务ID必须是整数: {task_id}"}
+            )
+        
+        # 获取任务文件列表
+        try:
+            task_id_int = int(task_id)
+            files = await task_service.get_task_files(task_id_int)
+            
+            # 如果files是None，转换为空列表
+            files = files or []
+            
+            # 格式化日期时间为ISO格式
+            if isinstance(files, list):
+                for file in files:
+                    if "created_at" in file and file["created_at"]:
+                        if isinstance(file["created_at"], datetime):
+                            file["created_at"] = file["created_at"].isoformat()
+            
+            logger.info(f"成功获取任务文件列表: ID={task_id}, 文件数量={len(files)}")
+            return {"files": files}
+        except Exception as e:
+            logger.error(f"获取任务文件列表失败: {str(e)}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"获取任务文件列表失败: {str(e)}"}
+            )
     except Exception as e:
         logger.error(f"获取任务文件列表失败，意外错误: {str(e)}", exc_info=True)
         return JSONResponse(
-            {"error": f"获取任务文件列表失败: {str(e)}"},
-            status_code=500
+            status_code=500,
+            content={"error": f"获取任务文件列表失败: {str(e)}"}
         )
 
 @app.get("/api/run")

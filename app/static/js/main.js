@@ -615,6 +615,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 fileList.innerHTML = '<div class="loading">正在加载文件列表...</div>';
             }
             
+            // 确保taskId存在且不为undefined
+            if (!taskId) {
+                console.error('fetchGeneratedFiles: taskId为空或undefined');
+                if (fileList) {
+                    fileList.innerHTML = '<div class="error-message">任务ID无效</div>';
+                }
+                return [];
+            }
+            
+            console.log(`发送请求获取任务 ${taskId} 的文件列表...`);
+            
             // 使用POST方法和请求体传递任务ID
             const response = await fetchWithAuth(`/api/task_detail/files`, {
                 method: 'POST',
@@ -624,12 +635,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify({ task_id: taskId })
             });
             
+            console.log('收到响应：', response);
+            
             if (response.ok) {
                 // 处理响应数据 - 兼容两种格式：直接数组或包含files字段的对象
                 const files = Array.isArray(response.data) ? response.data : 
                              (response.data && response.data.files ? response.data.files : []);
                 
-                console.log(`获取到 ${files.length} 个文件`);
+                console.log(`获取到 ${files.length} 个文件`, files);
                 
                 // 更新文件列表UI
                 if (fileList) {
@@ -656,7 +669,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 return files;
             } else {
-                console.error('获取文件列表失败:', response.status, response.message);
+                console.error('获取文件列表失败:', response.status, response.message || response.data?.error || '未知错误');
                 
                 if (fileList) {
                     fileList.innerHTML = '<div class="error-message">获取文件列表失败</div>';

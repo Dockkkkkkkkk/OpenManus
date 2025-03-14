@@ -356,6 +356,25 @@ class TaskService:
             logger.error(f"获取任务日志内容失败: {str(e)}")
             raise
     
+    async def update_task_log_url(self, task_id: int, log_url: str) -> bool:
+        """更新任务的日志URL"""
+        try:
+            if not db_service.db_available:
+                # 如果数据库不可用，更新内存记录
+                if str(task_id) in self.in_memory_tasks:
+                    self.in_memory_tasks[str(task_id)]["log_url"] = log_url
+                    logger.info(f"内存模式: 更新任务日志URL成功: ID={task_id}")
+                    return True
+                return False
+                
+            # 调用数据库服务更新日志URL
+            result = db_service.update_task(task_id, {"log_url": log_url})
+            logger.info(f"更新任务日志URL成功: ID={task_id}")
+            return result
+        except Exception as e:
+            logger.error(f"更新任务日志URL失败: {str(e)}")
+            return False
+    
     async def scan_and_upload_task_files(self, task_id: int, directory: str, pattern: str = "*") -> List[Dict[str, Any]]:
         """扫描目录中的文件并上传到COS"""
         try:
@@ -677,7 +696,11 @@ class TaskService:
                 task = db_service.get_task(task_id)
                 if not task:
                     logger.warning(f"获取日志失败：找不到任务 ID={task_id}")
-                    return []
+                    return [{
+                        'timestamp': datetime.now().isoformat(),
+                        'level': 'warning',
+                        'message': f'找不到任务 ID={task_id}'
+                    }]
                     
                 # 如果任务有日志URL，尝试下载日志内容
                 if task.get('log_url'):
@@ -700,20 +723,39 @@ class TaskService:
                                     except json.JSONDecodeError:
                                         # 如果不是JSON，按普通文本处理
                                         timestamp = datetime.now().isoformat()
+                                        level = 'info'
+                                        message = line_str
+                                        
+                                        # 处理错误消息，使其更加可读
+                                        if "RetryError" in line_str:
+                                            level = 'error'
+                                            
+                                            # 提取RateLimitError
+                                            if "RateLimitError" in line_str:
+                                                message = "API调用频率超限，请稍后再试"
+                                            else:
+                                                # 提取更有意义的错误消息
+                                                message = "任务执行过程中发生错误，请稍后再试"
+                                        
+                                        # 尝试提取时间戳
                                         if '[' in line_str and ']' in line_str:
-                                            # 尝试提取时间戳
                                             try:
                                                 timestamp_str = line_str.split('[')[1].split(']')[0]
                                                 timestamp = datetime.fromisoformat(timestamp_str).isoformat()
                                                 message = line_str.split(']', 1)[1].strip()
+                                                
+                                                # 处理日志级别
+                                                if len(line_str.split('[')) > 2:
+                                                    level_str = line_str.split('[')[2].split(']')[0].lower()
+                                                    if level_str in ['info', 'error', 'warning', 'debug']:
+                                                        level = level_str
                                             except:
-                                                message = line_str
-                                        else:
-                                            message = line_str
+                                                # 如果提取时间戳失败，保留原始消息
+                                                pass
                                         
                                         logs.append({
                                             'timestamp': timestamp,
-                                            'level': 'info',
+                                            'level': level,
                                             'message': message
                                         })
                                 except Exception as decode_error:
@@ -721,7 +763,7 @@ class TaskService:
                                     logs.append({
                                         'timestamp': datetime.now().isoformat(),
                                         'level': 'warning',
-                                        'message': f"日志解码失败: {str(decode_error)}, 原始数据: {str(line)}"
+                                        'message': f"日志解码失败: {str(decode_error)}"
                                     })
                     except Exception as e:
                         logger.error(f"下载日志内容失败: {str(e)}")
@@ -743,6 +785,15 @@ class TaskService:
                     # 简单解析日志行
                     timestamp = datetime.now().isoformat()
                     level = 'info'
+                    message = line
+                    
+                    # 处理错误消息，使其更加可读
+                    if "RetryError" in line:
+                        level = 'error'
+                        if "RateLimitError" in line:
+                            message = "API调用频率超限，请稍后再试"
+                        else:
+                            message = "任务执行过程中发生错误，请稍后再试"
                     
                     # 尝试提取级别和时间戳
                     if '[' in line:
@@ -757,11 +808,11 @@ class TaskService:
                                         level = level_str
                                 message = line.split(']', 2)[-1].strip()
                             except:
-                                message = line
+                                # 如果提取失败，使用原始消息
+                                pass
                         else:
-                            message = line
-                    else:
-                        message = line
+                            # 如果格式不匹配，使用原始消息
+                            pass
                     
                     logs.append({
                         'timestamp': timestamp,
@@ -779,6 +830,15 @@ class TaskService:
             
             # 确保日志按时间排序
             logs.sort(key=lambda x: x.get('timestamp', ''), reverse=False)
+            
+            # 将RetryError替换为可读的消息
+            for log in logs:
+                if isinstance(log.get('message'), str) and "RetryError" in log.get('message', ''):
+                    if "RateLimitError" in log.get('message', ''):
+                        log['message'] = "API调用频率超限，请稍后再试"
+                    else:
+                        log['message'] = "任务执行过程中发生错误，请稍后再试"
+                    log['level'] = 'error'
             
             logger.debug(f"获取到 {len(logs)} 条日志")
             return logs
